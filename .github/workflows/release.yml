@@ -1,0 +1,107 @@
+name: release
+
+# Tag a version (e.g. v0.1.0) to build, sign, notarize, and publish the
+# rise-mcp-bridge binaries + SHA256SUMS to a GitHub Release. Consuming plugins
+# fetch these artifacts at setup time and verify them against SHA256SUMS.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the release + upload assets
+
+jobs:
+  # ---- macOS: universal binary, codesigned + notarized -------------------
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+
+      - name: Build universal binary
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/arm64 .
+          GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/amd64 .
+          lipo -create -output dist/rise-mcp-bridge-darwin-universal dist/arm64 dist/amd64
+          rm -f dist/arm64 dist/amd64
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f cert.p12
+
+      - name: Codesign (hardened runtime)
+        env:
+          DEVELOPER_ID_APP: ${{ secrets.DEVELOPER_ID_APP }}
+        run: |
+          codesign --force --options runtime --timestamp \
+            --entitlements entitlements.plist \
+            --sign "$DEVELOPER_ID_APP" dist/rise-mcp-bridge-darwin-universal
+          codesign --verify --strict --verbose=2 dist/rise-mcp-bridge-darwin-universal
+
+      - name: Notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent dist/rise-mcp-bridge-darwin-universal notarize.zip
+          xcrun notarytool submit notarize.zip \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          rm -f notarize.zip
+
+      - uses: actions/upload-artifact@v4
+        with: { name: macos, path: dist/rise-mcp-bridge-darwin-universal }
+
+  # ---- Windows + Linux ----------------------------------------------------
+  others:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+      - name: Build
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/rise-mcp-bridge-windows-amd64.exe .
+          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/rise-mcp-bridge-linux-amd64 .
+      # NOTE: sign the Windows .exe here with your code-signing cert (e.g. Azure
+      # Trusted Signing / signtool) before upload to avoid SmartScreen warnings.
+      - uses: actions/upload-artifact@v4
+        with: { name: others, path: dist/* }
+
+  # ---- Assemble checksums + publish release ------------------------------
+  release:
+    needs: [macos, others]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: staging }
+      - name: Collect + checksum
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find staging -type f -exec cp {} dist/ \;
+          ( cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS )
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

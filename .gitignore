@@ -1,0 +1,11 @@
+# build output
+/dist/
+
+# per-user runtime secrets (should never be near this repo, but belt-and-suspenders)
+config.json
+token.json
+client_id
+
+# go
+*.test
+*.out
