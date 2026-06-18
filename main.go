@@ -50,6 +50,9 @@ func run(configDirFlag string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// A trapped signal cancels ctx; force a prompt exit even while blocked on a
+	// stdin read (otherwise Ctrl-C is swallowed during interactive runs).
+	go func() { <-ctx.Done(); os.Exit(0) }()
 
 	client, err := newProxiedClient(cfg.ProxyURL, cfg.CAFile)
 	if err != nil {
