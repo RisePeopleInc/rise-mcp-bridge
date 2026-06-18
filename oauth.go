@@ -18,31 +18,22 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// ----------------------------------------------------------------------------
-// OAuth 2.0 against Metabase's embedded OAuth server.
-//
-// Metabase 60's MCP server authenticates MCP clients with OAuth 2.0 (PKCE,
-// dynamic client registration, loopback redirect). All of these HTTP calls go
-// through the SAME proxied client (newProxiedClient), so token acquisition also
-// egresses from the allowlisted proxy IP.
-//
-// Flow (first connection):
-//   1. Discover the protected-resource / authorization-server metadata.
-//      Discovery starts from the WWW-Authenticate header Metabase returns on an
-//      unauthenticated request to the MCP endpoint (resource_metadata URL is
-//      built from Metabase's Site URL — hence config.MetabaseURL must match it).
-//   2. Dynamically register this client (RFC 7591) if no client_id is cached.
-//   3. Open the user's browser to the authorization endpoint (PKCE challenge),
-//      with a loopback redirect_uri on 127.0.0.1:<random port>.
-//   4. Capture the code on the loopback listener, exchange for tokens.
-//   5. Persist tokens to <configDir>/token.json and refresh as needed.
-//
-// >>> VALIDATION SPIKE (Rise eng): the discovery + dynamic-registration request
-// >>> shapes below must be confirmed against the live Metabase instance. The
-// >>> endpoints and field names follow the MCP authorization spec and Metabase
-// >>> docs, but the exact metadata URLs are instance-specific. See
-// >>> bridge/README.md. Everything routes through `client` (proxied).
-// ----------------------------------------------------------------------------
+// Fixed loopback redirect so the registered redirect_uri exactly matches the one
+// sent at authorize time -- Metabase validates this strictly.
+const (
+	loopbackAddr     = "127.0.0.1:47000"
+	loopbackRedirect = "http://127.0.0.1:47000/callback"
+)
+
+// Fallback agent scopes if the server's discovery metadata doesn't advertise
+// scopes_supported. These are the scopes a dynamically-registered MCP client is
+// granted by default; without them the MCP tools/list is filtered to empty.
+var defaultAgentScopes = []string{
+	"agent:search", "agent:query", "agent:sql:*", "agent:notebook:*",
+	"agent:viz:*", "agent:dashboard:*", "agent:document:*", "agent:alert:*",
+	"agent:resource:*", "agent:todo:*", "agent:metadata:*", "agent:question:*",
+	"agent:transforms:*", "agent:snippets:*",
+}
 
 type tokenStore struct {
 	dir string
@@ -67,36 +58,25 @@ func (t tokenStore) save(tok *oauth2.Token) error {
 	if err != nil {
 		return err
 	}
-	// 0600: tokens are per-user secrets.
 	return os.WriteFile(t.path(), raw, 0o600)
 }
 
-// authServerMeta is the subset of RFC 8414 authorization-server metadata we use.
 type authServerMeta struct {
-	Issuer                string `json:"issuer"`
-	AuthorizationEndpoint string `json:"authorization_endpoint"`
-	TokenEndpoint         string `json:"token_endpoint"`
-	RegistrationEndpoint  string `json:"registration_endpoint"`
+	Issuer                string   `json:"issuer"`
+	AuthorizationEndpoint string   `json:"authorization_endpoint"`
+	TokenEndpoint         string   `json:"token_endpoint"`
+	RegistrationEndpoint  string   `json:"registration_endpoint"`
+	ScopesSupported       []string `json:"scopes_supported"`
 }
 
-// discover fetches the authorization-server metadata via the proxied client.
-//
-// VALIDATE: confirm the metadata path Metabase advertises. The MCP auth spec
-// uses the WWW-Authenticate `resource_metadata` link on a 401 from the MCP
-// endpoint, which in turn points at the auth-server metadata document.
 func discover(ctx context.Context, client *http.Client, mcpEndpoint string) (*authServerMeta, error) {
-	// Probe the MCP endpoint unauthenticated to read WWW-Authenticate.
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, mcpEndpoint, nil)
-	resp, err := client.Do(req)
-	if err != nil {
+	if resp, err := client.Do(req); err == nil {
+		resp.Body.Close()
+	} else {
 		return nil, fmt.Errorf("probe mcp endpoint via proxy: %w", err)
 	}
-	defer resp.Body.Close()
 
-	// TODO(validate): parse resp.Header["Www-Authenticate"] -> resource_metadata
-	// URL -> fetch -> authorization_servers[0] -> fetch RFC 8414 doc. Fall back
-	// to the conventional /.well-known/oauth-authorization-server on the
-	// Metabase origin if the header path is absent.
 	metaURL := originOf(mcpEndpoint) + "/.well-known/oauth-authorization-server"
 	mreq, _ := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
 	mresp, err := client.Do(mreq)
@@ -114,32 +94,33 @@ func discover(ctx context.Context, client *http.Client, mcpEndpoint string) (*au
 	return &m, nil
 }
 
-// Authenticate returns a token source backed by the proxied client, performing
-// the interactive loopback PKCE flow on first run and reusing/refreshing the
-// cached token thereafter.
 func Authenticate(ctx context.Context, client *http.Client, cfg *Config, store tokenStore) (oauth2.TokenSource, error) {
 	meta, err := discover(ctx, client, cfg.MCPEndpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	clientID, err := ensureClientID(ctx, client, meta, store)
+	clientID, err := ensureClientID(ctx, client, meta, store, loopbackRedirect)
 	if err != nil {
 		return nil, err
 	}
 
+	// Request the agent scopes, or the MCP tools/list comes back filtered to empty.
+	scopes := meta.ScopesSupported
+	if len(scopes) == 0 {
+		scopes = defaultAgentScopes
+	}
+
 	conf := &oauth2.Config{
-		ClientID: clientID,
+		ClientID:    clientID,
+		RedirectURL: loopbackRedirect,
+		Scopes:      scopes,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  meta.AuthorizationEndpoint,
 			TokenURL: meta.TokenEndpoint,
 		},
-		// Scopes: per Metabase MCP — the granted token is scoped to the user's
-		// Metabase permissions regardless; leave empty unless the instance
-		// advertises required scopes in metadata.
 	}
 
-	// Reuse cached token if present.
 	if tok, ok := store.load(); ok {
 		return persistingSource{store: store, src: conf.TokenSource(ctxWithClient(ctx, client), tok)}, nil
 	}
@@ -154,22 +135,20 @@ func Authenticate(ctx context.Context, client *http.Client, cfg *Config, store t
 	return persistingSource{store: store, src: conf.TokenSource(ctxWithClient(ctx, client), tok)}, nil
 }
 
-// ensureClientID returns a cached dynamic-registration client_id or registers a
-// new one (RFC 7591) via the proxied client.
-func ensureClientID(ctx context.Context, client *http.Client, meta *authServerMeta, store tokenStore) (string, error) {
+func ensureClientID(ctx context.Context, client *http.Client, meta *authServerMeta, store tokenStore, redirectURI string) (string, error) {
 	idPath := filepath.Join(store.dir, "client_id")
 	if b, err := os.ReadFile(idPath); err == nil && len(b) > 0 {
 		return string(b), nil
 	}
 	if meta.RegistrationEndpoint == "" {
-		return "", fmt.Errorf("no registration_endpoint advertised and no cached client_id; see bridge/README.md")
+		return "", fmt.Errorf("no registration_endpoint advertised and no cached client_id")
 	}
 	body, _ := json.Marshal(map[string]any{
 		"client_name":                "Rise MCP Bridge",
-		"redirect_uris":              []string{"http://127.0.0.1/callback"}, // host fixed up at auth time
+		"redirect_uris":              []string{redirectURI},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
-		"token_endpoint_auth_method": "none", // public client + PKCE
+		"token_endpoint_auth_method": "none",
 	})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, meta.RegistrationEndpoint, bytesReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -188,23 +167,16 @@ func ensureClientID(ctx context.Context, client *http.Client, meta *authServerMe
 	return reg.ClientID, nil
 }
 
-// loopbackPKCE runs the interactive authorization-code-with-PKCE flow using a
-// transient 127.0.0.1 listener as the redirect target, opening the user's
-// browser to the Metabase consent page.
 func loopbackPKCE(ctx context.Context, client *http.Client, conf *oauth2.Config) (*oauth2.Token, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", loopbackAddr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("listen on %s (another sign-in in progress?): %w", loopbackAddr, err)
 	}
 	defer ln.Close()
-	conf.RedirectURL = fmt.Sprintf("http://%s/callback", ln.Addr().String())
 
 	verifier := oauth2.GenerateVerifier()
 	state := randString(24)
-	authURL := conf.AuthCodeURL(state,
-		oauth2.S256ChallengeOption(verifier),
-		oauth2.AccessTypeOffline,
-	)
+	authURL := conf.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier))
 
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
@@ -225,8 +197,7 @@ func loopbackPKCE(ctx context.Context, client *http.Client, conf *oauth2.Config)
 	go srv.Serve(ln)
 	defer srv.Close()
 
-	// Prompt is written to stderr so it never corrupts the stdio MCP stream.
-	fmt.Fprintf(os.Stderr, "\n[rise-metabase] Opening your browser to sign in to Metabase…\n  If it doesn't open, visit:\n  %s\n\n", authURL)
+	fmt.Fprintf(os.Stderr, "\n[rise-mcp-bridge] Opening your browser to sign in to Metabase...\n  If it doesn't open, visit:\n  %s\n\n", authURL)
 	openBrowser(authURL)
 
 	select {
@@ -239,7 +210,6 @@ func loopbackPKCE(ctx context.Context, client *http.Client, conf *oauth2.Config)
 	}
 }
 
-// persistingSource re-saves the token whenever it is refreshed.
 type persistingSource struct {
 	store tokenStore
 	src   oauth2.TokenSource
@@ -253,8 +223,6 @@ func (p persistingSource) Token() (*oauth2.Token, error) {
 	return tok, err
 }
 
-// ctxWithClient injects the proxied client so oauth2 token/exchange calls also
-// transit the Rise proxy.
 func ctxWithClient(ctx context.Context, client *http.Client) context.Context {
 	return context.WithValue(ctx, oauth2.HTTPClient, client)
 }
@@ -279,7 +247,6 @@ func randString(n int) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// pkceS256 is provided for reference; oauth2.S256ChallengeOption handles this.
 func pkceS256(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
