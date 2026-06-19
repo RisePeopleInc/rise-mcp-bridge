@@ -17,7 +17,7 @@ import (
 //
 //	{
 //	  "mcp_endpoint": "https://metabase.example.com/api/metabase-mcp",
-//	  "proxy_url":    "https://USER:PASS@proxy.example.com:65180",
+//	  "proxy_url":    "https://USER:PASS@proxy.example.com:PORT",
 //	  "auth":         "oauth"
 //	}
 //
@@ -25,7 +25,7 @@ import (
 //
 //	{
 //	  "mcp_endpoint": "https://tool.example.com/mcp",
-//	  "proxy_url":    "https://USER:PASS@proxy.example.com:65180",
+//	  "proxy_url":    "https://USER:PASS@proxy.example.com:PORT",
 //	  "auth":         "bearer",
 //	  "bearer_token": "..."
 //	}

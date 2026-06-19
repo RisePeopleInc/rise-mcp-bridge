@@ -8,9 +8,10 @@ name: release
 #   - macOS:   Developer ID Application cert via MAC_CSC_LINK / MAC_CSC_KEY_PASSWORD,
 #              notarized with APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD.
 #   - Windows: Azure Artifact Signing (Trusted Signing) over GitHub OIDC — no stored
-#              client secret. Reuses the SIGNING-ACCOUNT account +
-#              CERT-PROFILE cert profile. Requires a federated credential on the
-#              existing Entra app for this repo+environment (see README "Signing setup").
+#              client secret. Account/profile/endpoint come from repo Variables
+#              (TRUSTED_SIGNING_*); the AZURE_* secrets are public OIDC identifiers.
+#              Requires a federated credential on the signing Entra app for this
+#              repo+environment (see README "Signing setup").
 
 on:
   push:
@@ -129,9 +130,9 @@ jobs:
           $metadataPath = "$env:RUNNER_TEMP\artifact-signing-metadata.json"
           @'
           {
-            "Endpoint": "https://eus.codesigning.azure.net/",
-            "CodeSigningAccountName": "SIGNING-ACCOUNT",
-            "CertificateProfileName": "CERT-PROFILE"
+            "Endpoint": "${{ vars.TRUSTED_SIGNING_ENDPOINT }}",
+            "CodeSigningAccountName": "${{ vars.TRUSTED_SIGNING_ACCOUNT }}",
+            "CertificateProfileName": "${{ vars.TRUSTED_SIGNING_PROFILE }}"
           }
           '@ | Out-File -Encoding utf8 $metadataPath
           "AZURE_ARTIFACT_SIGNING_METADATA_PATH=$metadataPath" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV

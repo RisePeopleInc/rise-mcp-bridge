@@ -51,30 +51,30 @@ GitHub Release:
 Consuming plugins **fetch the pinned release at setup time and verify against
 `SHA256SUMS`** — binaries are not committed to the marketplace repo.
 
-### Signing setup (reuses Rise's existing infrastructure)
+### Signing setup
 
-This workflow reuses the same certs and Azure signing account as `raise-editor`
-(see its `docs/azure-signing-setup.md`), so there's no new Apple cert or Azure
-identity validation to provision.
+Maintainers: the internal provisioning runbook (Apple Developer ID + Azure
+Artifact Signing account, identity validation, Entra app) lives in the private
+ops docs. All instance-specific values are supplied at build time via repo
+secrets and variables — nothing internal is hardcoded in this repo.
 
-**macOS** — copy these repo secrets from `rise-md-editor` (or promote them to
-org-level): `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`,
-`APPLE_APP_SPECIFIC_PASSWORD`. (We don't need `MAC_INSTALLER_CSC_*` — that's only
-for `.pkg`; this ships a bare binary.) The signing identity is auto-discovered
-from the imported cert.
+**macOS** — repo **secrets**: `MAC_CSC_LINK` (base64 Developer ID Application
+`.p12`), `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`,
+`APPLE_APP_SPECIFIC_PASSWORD`. The signing identity is auto-discovered from the
+imported cert.
 
 **Windows (Azure Artifact Signing over OIDC)** — one-time wiring:
 
-1. Add a **federated credential** to the existing Entra app
-   `SIGNING-APP`: scenario *GitHub Actions*, entity *Environment*,
-   repo `RisePeopleInc/rise-mcp-bridge`, environment `rise-mcp-bridge-signing`
-   (subject `repo:RisePeopleInc/rise-mcp-bridge:environment:rise-mcp-bridge-signing`).
+1. Add a **federated credential** to your org's signing Entra app: scenario
+   *GitHub Actions*, entity *Environment*, repo `RisePeopleInc/rise-mcp-bridge`,
+   environment `rise-mcp-bridge-signing` (subject
+   `repo:RisePeopleInc/rise-mcp-bridge:environment:rise-mcp-bridge-signing`).
 2. Create a GitHub **environment** named `rise-mcp-bridge-signing` on this repo.
-3. Set repo secrets `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`
-   (same public-identifier values as `rise-md-editor`).
-
-The account/profile names (`SIGNING-ACCOUNT` / `CERT-PROFILE`)
-are non-secret config, hardcoded in `release.yml`.
+3. Repo **secrets**: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`
+   (public OIDC identifiers).
+4. Repo **variables**: `TRUSTED_SIGNING_ENDPOINT`, `TRUSTED_SIGNING_ACCOUNT`,
+   `TRUSTED_SIGNING_PROFILE` (the signing account's endpoint / account / cert
+   profile names).
 
 To build unsigned for a dry run: `workflow_dispatch` with `skip_signing: true`
 (no secrets needed).

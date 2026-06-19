@@ -15,8 +15,8 @@ import (
 //
 // This is the part of the bridge that satisfies the core security requirement:
 // because the request egresses from the proxy, it arrives at the upstream MCP
-// server from the allowlisted proxy IP (REDACTED-EGRESS-IP/32). Nothing reaches the
-// server directly.
+// server from the proxy's allowlisted egress IP. Nothing reaches the server
+// directly.
 //
 // Go's http.Transport natively supports an https:// proxy (TLS-to-proxy, i.e.
 // TLS-in-TLS): when Transport.Proxy returns an https URL, the standard library
