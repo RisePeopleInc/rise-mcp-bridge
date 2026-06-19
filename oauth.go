@@ -37,9 +37,18 @@ var defaultAgentScopes = []string{
 
 type tokenStore struct {
 	dir string
+	key string // per-endpoint suffix so multiple plugins/tools cache independently
 }
 
-func (t tokenStore) path() string { return filepath.Join(t.dir, "token.json") }
+func (t tokenStore) path() string         { return filepath.Join(t.dir, "token-"+t.key+".json") }
+func (t tokenStore) clientIDPath() string { return filepath.Join(t.dir, "client_id-"+t.key) }
+
+// endpointKey derives a short, filesystem-safe key from the MCP endpoint URL, so
+// each target endpoint gets its own cached token + dynamic client registration.
+func endpointKey(endpoint string) string {
+	sum := sha256.Sum256([]byte(endpoint))
+	return base64.RawURLEncoding.EncodeToString(sum[:])[:16]
+}
 
 func (t tokenStore) load() (*oauth2.Token, bool) {
 	raw, err := os.ReadFile(t.path())
@@ -94,8 +103,8 @@ func discover(ctx context.Context, client *http.Client, mcpEndpoint string) (*au
 	return &m, nil
 }
 
-func Authenticate(ctx context.Context, client *http.Client, cfg *Config, store tokenStore) (oauth2.TokenSource, error) {
-	meta, err := discover(ctx, client, cfg.MCPEndpoint)
+func Authenticate(ctx context.Context, client *http.Client, mcpEndpoint string, store tokenStore) (oauth2.TokenSource, error) {
+	meta, err := discover(ctx, client, mcpEndpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +145,7 @@ func Authenticate(ctx context.Context, client *http.Client, cfg *Config, store t
 }
 
 func ensureClientID(ctx context.Context, client *http.Client, meta *authServerMeta, store tokenStore, redirectURI string) (string, error) {
-	idPath := filepath.Join(store.dir, "client_id")
+	idPath := store.clientIDPath()
 	if b, err := os.ReadFile(idPath); err == nil && len(b) > 0 {
 		return string(b), nil
 	}

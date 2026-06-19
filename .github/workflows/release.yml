@@ -44,7 +44,7 @@ jobs:
           lipo -create -output dist/rise-mcp-bridge-darwin-universal dist/arm64 dist/amd64
           rm -f dist/arm64 dist/amd64
 
-      - name: Codesign + notarize
+      - name: Codesign + notarize (bare binary + installer .app)
         if: ${{ inputs.skip_signing != true }}
         env:
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
@@ -52,6 +52,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           BIN=dist/rise-mcp-bridge-darwin-universal
@@ -66,19 +67,51 @@ jobs:
           security import /tmp/cert.p12 -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" build.keychain
           rm -f /tmp/cert.p12
-
           IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')
           echo "Signing as: $IDENTITY"
+
+          notarize() { xcrun notarytool submit "$1" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait; }
+
+          # 1) Bare universal binary (Claude Code CLI / power users). Can't be stapled.
           codesign --force --options runtime --timestamp --entitlements entitlements.plist --sign "$IDENTITY" "$BIN"
           codesign --verify --strict --verbose=2 "$BIN"
+          ditto -c -k --keepParent "$BIN" /tmp/bin.zip && notarize /tmp/bin.zip && rm -f /tmp/bin.zip
 
-          # Notarize (a bare executable can't be stapled — Gatekeeper verifies online).
-          ditto -c -k --keepParent "$BIN" notarize.zip
-          xcrun notarytool submit notarize.zip --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
-          rm -f notarize.zip
+          # 2) Double-click installer app (notarizable AND stapleable, unlike a bare binary).
+          VER="${VERSION#v}"
+          APP=dist/RiseMCPBridge.app
+          mkdir -p "$APP/Contents/MacOS"
+          cp "$BIN" "$APP/Contents/MacOS/RiseMCPBridge"
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>Rise MCP Bridge</string>
+            <key>CFBundleDisplayName</key><string>Rise MCP Bridge</string>
+            <key>CFBundleIdentifier</key><string>com.risepeople.rise-mcp-bridge</string>
+            <key>CFBundleExecutable</key><string>RiseMCPBridge</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleVersion</key><string>${VER:-0.0.0}</string>
+            <key>CFBundleShortVersionString</key><string>${VER:-0.0.0}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>LSUIElement</key><true/>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          PLIST
+          codesign --force --deep --options runtime --timestamp --entitlements entitlements.plist --sign "$IDENTITY" "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+          ditto -c -k --keepParent "$APP" /tmp/app.zip && notarize /tmp/app.zip && rm -f /tmp/app.zip
+          xcrun stapler staple "$APP"
+          ( cd dist && ditto -c -k --keepParent RiseMCPBridge.app RiseMCPBridge.app.zip && rm -rf RiseMCPBridge.app )
+          echo "built dist/RiseMCPBridge.app.zip (notarized + stapled)"
 
       - uses: actions/upload-artifact@v4
-        with: { name: macos, path: dist/rise-mcp-bridge-darwin-universal }
+        with:
+          name: macos
+          path: |
+            dist/rise-mcp-bridge-darwin-universal
+            dist/RiseMCPBridge.app.zip
+          if-no-files-found: error
 
   # ---- Windows: Azure Artifact Signing over OIDC -------------------------
   build-win:
@@ -161,8 +194,17 @@ jobs:
           $sig | Format-List
           if ($sig.Status -ne 'Valid') { Write-Error "signature not Valid: $($sig.Status)"; exit 1 }
 
+      - name: Name the double-click installer copy (same signed bytes)
+        shell: bash
+        run: cp dist/rise-mcp-bridge-windows-amd64.exe dist/RiseMCPBridge.exe
+
       - uses: actions/upload-artifact@v4
-        with: { name: windows, path: dist/rise-mcp-bridge-windows-amd64.exe }
+        with:
+          name: windows
+          path: |
+            dist/rise-mcp-bridge-windows-amd64.exe
+            dist/RiseMCPBridge.exe
+          if-no-files-found: error
 
   # ---- Linux -------------------------------------------------------------
   build-linux:
