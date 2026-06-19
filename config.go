@@ -13,34 +13,34 @@ import (
 // skill into the bridge's config dir (typically ${CLAUDE_PLUGIN_DATA}). It is
 // NEVER committed to a repo — it lives only in the user's plugin data dir.
 //
-// Example config.json (OAuth, the Metabase case):
+// Preferred schema — RAW proxy credentials; the bridge does the URL-encoding, so
+// a setup skill can write this file with no encoding logic of its own:
 //
 //	{
 //	  "mcp_endpoint": "https://metabase.example.com/api/metabase-mcp",
-//	  "proxy_url":    "https://USER:PASS@proxy.example.com:PORT",
+//	  "proxy_host":   "proxy.example.com:PORT",
+//	  "proxy_user":   "USER",
+//	  "proxy_pass":   "PASS",
 //	  "auth":         "oauth"
 //	}
 //
-// Example (static bearer token):
-//
-//	{
-//	  "mcp_endpoint": "https://tool.example.com/mcp",
-//	  "proxy_url":    "https://USER:PASS@proxy.example.com:PORT",
-//	  "auth":         "bearer",
-//	  "bearer_token": "..."
-//	}
-//
-// proxy_url credentials MUST be URL-encoded (@->%40, :->%3A, #->%23, %->%25);
-// the consuming setup skill handles encoding before writing this file.
+// Back-compat: a pre-built "proxy_url" (with URL-encoded credentials) is still
+// accepted in place of the proxy_host/proxy_user/proxy_pass trio.
 type Config struct {
 	// MCPEndpoint is the full URL of the remote Streamable-HTTP MCP endpoint to
 	// bridge to (e.g. .../api/metabase-mcp). For OAuth, this host's Site URL must
 	// match what the server advertises in OAuth discovery.
 	MCPEndpoint string `json:"mcp_endpoint"`
 
-	// ProxyURL is the Rise HTTPS forward proxy with Basic-auth creds embedded.
-	// Scheme MUST be https:// (TLS to the proxy itself).
-	ProxyURL string `json:"proxy_url"`
+	// Preferred: raw proxy credentials. The bridge percent-encodes them when it
+	// builds the proxy URL, so callers write them verbatim (no client-side encoding).
+	ProxyHost string `json:"proxy_host,omitempty"`
+	ProxyUser string `json:"proxy_user,omitempty"`
+	ProxyPass string `json:"proxy_pass,omitempty"`
+
+	// Back-compat: a pre-built https:// proxy URL with Basic-auth creds embedded
+	// (URL-encoded). Used as-is when set, taking precedence over the trio above.
+	ProxyURL string `json:"proxy_url,omitempty"`
 
 	// Auth selects the upstream auth mode: "oauth" (default), "bearer", or "none".
 	Auth string `json:"auth"`
@@ -51,6 +51,26 @@ type Config struct {
 	// CAFile optionally points to a PEM bundle to trust for the UPSTREAM TLS
 	// connection (e.g. an internal CA fronting the MCP server). Empty = system roots.
 	CAFile string `json:"ca_file,omitempty"`
+}
+
+// proxyURL returns the effective https:// proxy URL with credentials. If
+// proxy_url is set it's used verbatim (back-compat); otherwise it's built from
+// the raw proxy_host/proxy_user/proxy_pass with correct percent-encoding applied
+// here — so consumers can write raw credentials into config.json.
+func (c *Config) proxyURL() (string, error) {
+	if strings.TrimSpace(c.ProxyURL) != "" {
+		return c.ProxyURL, nil
+	}
+	host := strings.TrimSpace(c.ProxyHost)
+	host = strings.TrimPrefix(host, "https://")
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.TrimRight(host, "/")
+	if host == "" || c.ProxyUser == "" || c.ProxyPass == "" {
+		return "", fmt.Errorf("proxy config incomplete: set proxy_host + proxy_user + proxy_pass (or a pre-encoded proxy_url)")
+	}
+	// url.UserPassword + URL.String() percent-encode the userinfo correctly.
+	u := url.URL{Scheme: "https", User: url.UserPassword(c.ProxyUser, c.ProxyPass), Host: host}
+	return u.String(), nil
 }
 
 func configDir(flagVal string) (string, error) {
@@ -94,12 +114,16 @@ func (c *Config) validate() error {
 	if err != nil || mu.Scheme == "" || mu.Host == "" {
 		return fmt.Errorf("mcp_endpoint is not a valid absolute URL: %q", c.MCPEndpoint)
 	}
-	pu, err := url.Parse(c.ProxyURL)
+	pURL, err := c.proxyURL()
+	if err != nil {
+		return err
+	}
+	pu, err := url.Parse(pURL)
 	if err != nil || pu.Host == "" {
-		return fmt.Errorf("proxy_url is not a valid URL: %q", c.ProxyURL)
+		return fmt.Errorf("could not resolve a valid proxy URL from the config")
 	}
 	if pu.Scheme != "https" {
-		return fmt.Errorf("proxy_url scheme must be https:// (got %q) — the Rise proxy expects a TLS connection to itself", pu.Scheme)
+		return fmt.Errorf("proxy must be https:// — the Rise proxy expects a TLS connection to itself")
 	}
 	switch c.Auth {
 	case "oauth", "none":

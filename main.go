@@ -54,7 +54,11 @@ func run(configDirFlag string) error {
 	// stdin read (otherwise Ctrl-C is swallowed during interactive runs).
 	go func() { <-ctx.Done(); os.Exit(0) }()
 
-	client, err := newProxiedClient(cfg.ProxyURL, cfg.CAFile)
+	proxyURL, err := cfg.proxyURL()
+	if err != nil {
+		return err
+	}
+	client, err := newProxiedClient(proxyURL, cfg.CAFile)
 	if err != nil {
 		return err
 	}
