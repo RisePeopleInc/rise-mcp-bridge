@@ -3,18 +3,31 @@ name: release
 # Tag a version (e.g. v0.1.0) to build, sign, notarize, and publish the
 # rise-mcp-bridge binaries + SHA256SUMS to a GitHub Release. Consuming plugins
 # fetch these artifacts at setup time and verify them against SHA256SUMS.
+#
+# Signing reuses Rise's existing infrastructure (see raise-editor):
+#   - macOS:   Developer ID Application cert via MAC_CSC_LINK / MAC_CSC_KEY_PASSWORD,
+#              notarized with APPLE_ID / APPLE_TEAM_ID / APPLE_APP_SPECIFIC_PASSWORD.
+#   - Windows: Azure Artifact Signing (Trusted Signing) over GitHub OIDC — no stored
+#              client secret. Reuses the SIGNING-ACCOUNT account +
+#              CERT-PROFILE cert profile. Requires a federated credential on the
+#              existing Entra app for this repo+environment (see README "Signing setup").
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      skip_signing:
+        description: "Build unsigned (dry run, no secrets needed)"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write   # create the release + upload assets
+  contents: write
 
 jobs:
-  # ---- macOS: universal binary, codesigned + notarized -------------------
-  macos:
+  # ---- macOS: universal binary, Developer ID signed + notarized ----------
+  build-mac:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -30,47 +43,128 @@ jobs:
           lipo -create -output dist/rise-mcp-bridge-darwin-universal dist/arm64 dist/amd64
           rm -f dist/arm64 dist/amd64
 
-      - name: Import signing certificate
+      - name: Codesign + notarize
+        if: ${{ inputs.skip_signing != true }}
         env:
-          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
-          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > cert.p12
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security import cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          rm -f cert.p12
-
-      - name: Codesign (hardened runtime)
-        env:
-          DEVELOPER_ID_APP: ${{ secrets.DEVELOPER_ID_APP }}
-        run: |
-          codesign --force --options runtime --timestamp \
-            --entitlements entitlements.plist \
-            --sign "$DEVELOPER_ID_APP" dist/rise-mcp-bridge-darwin-universal
-          codesign --verify --strict --verbose=2 dist/rise-mcp-bridge-darwin-universal
-
-      - name: Notarize
-        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
-          ditto -c -k --keepParent dist/rise-mcp-bridge-darwin-universal notarize.zip
-          xcrun notarytool submit notarize.zip \
-            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          BIN=dist/rise-mcp-bridge-darwin-universal
+          KCPW=ci-temp-$RANDOM
+
+          # Import the Developer ID Application cert into a throwaway keychain.
+          echo "$CSC_LINK" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "$KCPW" build.keychain
+          security default-keychain -s build.keychain
+          security list-keychains -d user -s build.keychain
+          security unlock-keychain -p "$KCPW" build.keychain
+          security import /tmp/cert.p12 -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" build.keychain
+          rm -f /tmp/cert.p12
+
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          echo "Signing as: $IDENTITY"
+          codesign --force --options runtime --timestamp --entitlements entitlements.plist --sign "$IDENTITY" "$BIN"
+          codesign --verify --strict --verbose=2 "$BIN"
+
+          # Notarize (a bare executable can't be stapled — Gatekeeper verifies online).
+          ditto -c -k --keepParent "$BIN" notarize.zip
+          xcrun notarytool submit notarize.zip --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
           rm -f notarize.zip
 
       - uses: actions/upload-artifact@v4
         with: { name: macos, path: dist/rise-mcp-bridge-darwin-universal }
 
-  # ---- Windows + Linux ----------------------------------------------------
-  others:
+  # ---- Windows: Azure Artifact Signing over OIDC -------------------------
+  build-win:
+    runs-on: windows-latest
+    # Federated-credential scope: only runs declaring this environment can mint
+    # an OIDC token the Entra app accepts. Must match the federated credential
+    # subject repo:RisePeopleInc/rise-mcp-bridge:environment:rise-mcp-bridge-signing
+    environment: rise-mcp-bridge-signing
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.22" }
+
+      - name: Build Windows exe
+        shell: bash
+        run: |
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/rise-mcp-bridge-windows-amd64.exe .
+
+      - uses: actions/setup-dotnet@v5
+        if: ${{ inputs.skip_signing != true }}
+        with: { dotnet-version: "8.0.x" }
+
+      - name: Install Artifact Signing dlib
+        if: ${{ inputs.skip_signing != true }}
+        shell: pwsh
+        run: |
+          $packageVersion = '1.0.95'  # bump after verifying on nuget.org/packages/Microsoft.Trusted.Signing.Client
+          nuget install Microsoft.Trusted.Signing.Client -Version $packageVersion -OutputDirectory "$env:RUNNER_TEMP\artifact-signing"
+          $dlib = Get-ChildItem -Path "$env:RUNNER_TEMP\artifact-signing" -Recurse -Filter 'Azure.CodeSigning.Dlib.dll' | Select-Object -First 1
+          if (-not $dlib) { Write-Error "Azure.CodeSigning.Dlib.dll not found"; exit 1 }
+          "AZURE_ARTIFACT_SIGNING_DLIB_PATH=$($dlib.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Locate signtool.exe
+        if: ${{ inputs.skip_signing != true }}
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe","C:\Program Files\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { Write-Error "signtool.exe not found"; exit 1 }
+          "SIGNTOOL_PATH=$($signtool.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Write Artifact Signing metadata
+        if: ${{ inputs.skip_signing != true }}
+        shell: pwsh
+        run: |
+          $metadataPath = "$env:RUNNER_TEMP\artifact-signing-metadata.json"
+          @'
+          {
+            "Endpoint": "https://eus.codesigning.azure.net/",
+            "CodeSigningAccountName": "SIGNING-ACCOUNT",
+            "CertificateProfileName": "CERT-PROFILE"
+          }
+          '@ | Out-File -Encoding utf8 $metadataPath
+          "AZURE_ARTIFACT_SIGNING_METADATA_PATH=$metadataPath" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Azure login (OIDC)
+        if: ${{ inputs.skip_signing != true }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign exe
+        if: ${{ inputs.skip_signing != true }}
+        shell: pwsh
+        run: |
+          & "$env:SIGNTOOL_PATH" sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 `
+            /dlib "$env:AZURE_ARTIFACT_SIGNING_DLIB_PATH" /dmdf "$env:AZURE_ARTIFACT_SIGNING_METADATA_PATH" `
+            "dist\rise-mcp-bridge-windows-amd64.exe"
+
+      - name: Verify signature
+        if: ${{ inputs.skip_signing != true }}
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature "dist\rise-mcp-bridge-windows-amd64.exe"
+          $sig | Format-List
+          if ($sig.Status -ne 'Valid') { Write-Error "signature not Valid: $($sig.Status)"; exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: dist/rise-mcp-bridge-windows-amd64.exe }
+
+  # ---- Linux -------------------------------------------------------------
+  build-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,19 +172,16 @@ jobs:
         with: { go-version: "1.22" }
       - name: Build
         run: |
-          set -euo pipefail
           mkdir -p dist
-          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/rise-mcp-bridge-windows-amd64.exe .
-          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/rise-mcp-bridge-linux-amd64 .
-      # NOTE: sign the Windows .exe here with your code-signing cert (e.g. Azure
-      # Trusted Signing / signtool) before upload to avoid SmartScreen warnings.
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/rise-mcp-bridge-linux-amd64 .
       - uses: actions/upload-artifact@v4
-        with: { name: others, path: dist/* }
+        with: { name: linux, path: dist/rise-mcp-bridge-linux-amd64 }
 
   # ---- Assemble checksums + publish release ------------------------------
   release:
-    needs: [macos, others]
+    needs: [build-mac, build-win, build-linux]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/download-artifact@v4
         with: { path: staging }

@@ -9,3 +9,14 @@ client_id
 # go
 *.test
 *.out
+
+
+#Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
+
+# local build artifacts (binaries built at repo root by `go build .`)
+/rise-mcp-bridge
+/rise-mcp-bridge.exe
+
+# Cowork/agent worktree state
+.claude/
