@@ -82,6 +82,12 @@ jobs:
           APP=dist/RiseMCPBridge.app
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp "$BIN" "$APP/Contents/MacOS/RiseMCPBridge"
+          # Second, loose copy that the installer self-installs. It is NOT the bundle's
+          # CFBundleExecutable, so --deep signs it as a standalone Mach-O whose signature
+          # has no Info.plist binding — unlike the main exe, it stays valid once copied
+          # out of the bundle to ~/.rise-mcp-bridge. (Copying the main exe out gives
+          # "invalid Info.plist (plist or signature have been modified)" and AMFI kills it.)
+          cp "$BIN" "$APP/Contents/MacOS/rise-mcp-bridge"
           cp packaging/macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cat > "$APP/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
@@ -102,6 +108,12 @@ jobs:
           PLIST
           codesign --force --deep --options runtime --timestamp --entitlements entitlements.plist --sign "$IDENTITY" "$APP"
           codesign --verify --strict --verbose=2 "$APP"
+          # Guard: the installer copies Contents/MacOS/rise-mcp-bridge OUT of the bundle,
+          # so it must verify as a bare file on its own. Prove that here (this is exactly
+          # the check that "killed: invalid Info.plist" would have failed pre-fix).
+          cp "$APP/Contents/MacOS/rise-mcp-bridge" /tmp/payload-check
+          codesign --verify --strict --verbose=2 /tmp/payload-check
+          rm -f /tmp/payload-check
           ditto -c -k --keepParent "$APP" /tmp/app.zip && notarize /tmp/app.zip && rm -f /tmp/app.zip
           xcrun stapler staple "$APP"
           ( cd dist && ditto -c -k --keepParent RiseMCPBridge.app RiseMCPBridge.app.zip && rm -rf RiseMCPBridge.app )

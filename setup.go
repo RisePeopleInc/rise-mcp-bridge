@@ -130,6 +130,17 @@ func selfInstall(configDir string) error {
 	if resolved, e := filepath.EvalSymlinks(self); e == nil {
 		self = resolved
 	}
+	// On macOS we're running as the .app's main executable
+	// (…/RiseMCPBridge.app/Contents/MacOS/RiseMCPBridge). That binary is signed in
+	// bundle context — its signature is bound to the bundle Info.plist, so a bare
+	// copy is invalid standalone and AMFI kills it ("invalid Info.plist…"). The app
+	// ships a second, standalone-signed copy next to it (…/MacOS/rise-mcp-bridge);
+	// install that one. Other platforms (and a non-bundle run) just install self.
+	if payload := filepath.Join(filepath.Dir(self), "rise-mcp-bridge"); payload != self {
+		if fi, e := os.Stat(payload); e == nil && fi.Mode().IsRegular() {
+			self = payload
+		}
+	}
 	name := "rise-mcp-bridge"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
@@ -157,7 +168,23 @@ func selfInstall(configDir string) error {
 		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, dest)
+	if err := os.Rename(tmp, dest); err != nil {
+		return err
+	}
+	dequarantine(dest)
+	return nil
+}
+
+// dequarantine strips com.apple.quarantine from a file we just installed. macOS
+// propagates the quarantine flag to files written by a quarantined app (the
+// downloaded installer), and a quarantined bare binary exec'd outside
+// LaunchServices can be killed by Gatekeeper. Our binary is notarized, so
+// de-quarantining our own installed copy is safe. Best-effort; no-op off macOS.
+func dequarantine(path string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	_ = exec.Command("xattr", "-d", "com.apple.quarantine", path).Run()
 }
 
 // revealFolder opens the install dir in the OS file browser (so the user can see

@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-06-19
+
+### Fixed
+
+- **macOS: installed bridge was killed at launch ("invalid Info.plist").** The installer self-installed the `.app`'s *main* executable (`Contents/MacOS/RiseMCPBridge`), which is signed in bundle context — its signature is bound to the bundle `Info.plist`, so the copy at `~/.rise-mcp-bridge/rise-mcp-bridge` failed signature validation and AMFI killed it with SIGKILL before any code ran. The symptom in Cowork was the `rise-metabase` connector stuck "connecting" then failing, with no OAuth tab and no logs (the process never executed). The `.app` itself was unaffected because it launches as a bundle with its `Info.plist` + stapled ticket present.
+  - **Fix:** the `.app` now ships a second, **standalone-signed** copy of the binary (`Contents/MacOS/rise-mcp-bridge`, a loose Mach-O whose signature has no `Info.plist` binding), and `selfInstall` installs *that* instead of the bundle main exe. A CI guard copies the payload out of the bundle and re-runs `codesign --verify --strict` on the bare file, so this class of bug fails the release build instead of shipping. `selfInstall` also strips `com.apple.quarantine` from the installed copy as belt-and-suspenders.
+
 ## [0.2.1] — 2026-06-19
 
 ### Added
