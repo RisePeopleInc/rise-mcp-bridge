@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-19
+
+### Added
+
+- **App icon (both platforms).** The downloaded installer now carries the Rise icon instead of a generic placeholder, so it's recognizably Rise's and doesn't look suspicious.
+  - **macOS** (`RiseMCPBridge.app`): ships `packaging/macos/AppIcon.icns`, wired in via `CFBundleIconFile`. Bundled into `Contents/Resources` before codesigning, so it's covered by the signature.
+  - **Windows** (`RiseMCPBridge.exe`): a Win32 resource (`packaging/windows/icon.ico`, derived from the same artwork) is compiled into the binary via `goversioninfo` (`resource_windows_amd64.syso`) before the build, so it's covered by the Azure signature. The same resource embeds publisher/version metadata (CompanyName, ProductName, FileDescription, version) so the file's Properties → Details tab is populated rather than blank.
+
 ## [0.2.0] — 2026-06-19
 
 Reworks the bridge into a **shared, self-installing dependency** so non-technical Cowork users can set it up with no terminal, and so multiple plugins can reuse one install.

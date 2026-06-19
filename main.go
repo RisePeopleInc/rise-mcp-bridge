@@ -26,7 +26,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 func stderr() *os.File { return os.Stderr }
 

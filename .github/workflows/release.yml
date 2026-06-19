@@ -80,8 +80,9 @@ jobs:
           # 2) Double-click installer app (notarizable AND stapleable, unlike a bare binary).
           VER="${VERSION#v}"
           APP=dist/RiseMCPBridge.app
-          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp "$BIN" "$APP/Contents/MacOS/RiseMCPBridge"
+          cp packaging/macos/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cat > "$APP/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -90,6 +91,7 @@ jobs:
             <key>CFBundleDisplayName</key><string>Rise MCP Bridge</string>
             <key>CFBundleIdentifier</key><string>com.risepeople.rise-mcp-bridge</string>
             <key>CFBundleExecutable</key><string>RiseMCPBridge</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleVersion</key><string>${VER:-0.0.0}</string>
             <key>CFBundleShortVersionString</key><string>${VER:-0.0.0}</string>
@@ -127,6 +129,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.22" }
+
+      - name: Embed icon + version resource
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Parse vMAJ.MIN.PATCH from the tag; fall back to 0.0.0 for dry-run dispatches.
+          VER="${VERSION#v}"
+          if [[ ! "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then VER="0.0.0"; fi
+          IFS='.' read -r MAJ MIN PAT <<< "$VER"
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.0
+          # Filename suffix _windows_amd64 makes Go link the .syso only for that target.
+          "$(go env GOPATH)/bin/goversioninfo" \
+            -64 \
+            -o resource_windows_amd64.syso \
+            -icon packaging/windows/icon.ico \
+            -ver-major "$MAJ" -ver-minor "$MIN" -ver-patch "$PAT" \
+            -product-version "$VER" -file-version "$VER" \
+            packaging/windows/versioninfo.json
 
       - name: Build Windows exe
         shell: bash
