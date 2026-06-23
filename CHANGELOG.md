@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-06-19
+
+### Fixed
+
+- **Windows: installer demanded admin rights.** The exe shipped with no embedded application manifest, so Windows fell back to installer-detection heuristics — it scans the binary, finds strings like "install"/"self-install", concludes it's an installer, and demands UAC elevation. Standard users (no admin) were blocked entirely.
+  - **Fix:** embed an application manifest (`packaging/windows/app.manifest`) declaring `requestedExecutionLevel = asInvoker`, wired in through `goversioninfo` via `versioninfo.json` `ManifestPath`. An explicit execution level disables installer detection, so the bridge runs as the launching user with no elevation. It only ever writes to `%USERPROFILE%\.rise-mcp-bridge`, so it never needs admin.
+
+### Notes
+
+- The Windows SmartScreen "Windows protected your PC" prompt is **reputation-based**, not a signing failure — a newly published signed binary trips it until download reputation accrues. Users click **More info → Run anyway**; this needs no admin rights. (Documented in the `rise-metabase` `metabase-setup` skill.)
+- **CI guard:** the Windows build now asserts (on every build, including dry runs) that the exe carries an embedded `asInvoker` RT_MANIFEST and the version/metadata resource (`mt.exe` + `FileVersionInfo`), so a silent `goversioninfo` embedding miss fails the build instead of resurfacing the admin prompt for a user.
+
 ## [0.2.2] — 2026-06-19
 
 ### Fixed

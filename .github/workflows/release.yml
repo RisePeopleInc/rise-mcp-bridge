@@ -168,6 +168,37 @@ jobs:
           mkdir -p dist
           GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/rise-mcp-bridge-windows-amd64.exe .
 
+      - name: Assert embedded resources (asInvoker manifest + version metadata)
+        # Runs always (incl. dry runs): if goversioninfo silently fails to embed
+        # the manifest, Windows installer-detection demands admin again. Catch it
+        # here instead of in a user's hands.
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "dist\rise-mcp-bridge-windows-amd64.exe").Path
+
+          # 1) Version/metadata resource (publisher etc.) must be present.
+          $vi = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+          Write-Host "CompanyName='$($vi.CompanyName)' ProductName='$($vi.ProductName)' FileVersion='$($vi.FileVersion)'"
+          if ($vi.CompanyName -ne 'Rise People Inc.') {
+            Write-Error "version resource missing/incorrect (CompanyName='$($vi.CompanyName)')"; exit 1
+          }
+
+          # 2) RT_MANIFEST must be embedded and request asInvoker.
+          $mt = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\mt.exe","C:\Program Files\Windows Kits\10\bin\*\x64\mt.exe" -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $mt) { Write-Error "mt.exe not found to verify manifest"; exit 1 }
+          $extracted = "$env:RUNNER_TEMP\embedded.manifest"
+          & $mt.FullName -nologo -inputresource:"$exe;#1" -out:"$extracted"
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $extracted)) {
+            Write-Error "no embedded RT_MANIFEST in the exe (manifest not embedded)"; exit 1
+          }
+          $manifest = Get-Content $extracted -Raw
+          Write-Host $manifest
+          if ($manifest -notmatch 'asInvoker') {
+            Write-Error "embedded manifest does not request asInvoker"; exit 1
+          }
+          Write-Host "OK: version metadata + asInvoker manifest embedded."
+
       - uses: actions/setup-dotnet@v5
         if: ${{ inputs.skip_signing != true }}
         with: { dotnet-version: "8.0.x" }
