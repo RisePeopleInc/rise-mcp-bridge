@@ -110,7 +110,7 @@ func steps(current int) []wizStep {
 	titles := []string{
 		"Install the Rise bridge",
 		"Enter your proxy credentials",
-		"Restart Claude or start a new chat",
+		"Open a new chat in Claude",
 	}
 	out := make([]wizStep, len(titles))
 	for i, t := range titles {
@@ -210,7 +210,7 @@ var successPage = template.Must(template.New("success").Parse(brandHead + `<body
 <p class="overline">What’s next</p>
 ` + stepsBlock + `
 {{if .Note}}<p class="note">{{.Note}}</p>{{end}}
-<p class="lead" style="margin-top:20px">You can close this tab and return to Claude.</p>
+<p class="lead" style="margin-top:20px">Close this tab and <b>open a new chat in Claude</b> — start fresh rather than returning to the chat you set this up in, which stays disconnected even after a restart.</p>
 </div>
 </body></html>`))
 

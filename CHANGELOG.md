@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-06-19
+
+### Changed
+
+- **Setup now tells users to open a *new* chat, not restart.** Field testing showed that restarting the Claude app and returning to the same chat does **not** pick up a freshly installed bridge — a chat initializes its connectors when it opens, so only a brand-new chat spawns the connector. The success page's final step is now "Open a new chat in Claude" (was "Restart Claude or start a new chat"), with a line explaining the old chat stays disconnected even after a restart.
+
 ## [0.2.5] — 2026-06-19
 
 ### Changed
