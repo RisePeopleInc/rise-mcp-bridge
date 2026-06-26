@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-06-19
+
+### Added
+
+- **Setup verifies the proxy credentials before saving.** The setup form now round-trips a probe request through the proxy with the entered username/password and only saves if they're accepted. A wrong password is caught immediately (HTTP 407) — the form re-renders inline with an error and keeps the host/username filled in so the user can fix just the password and resubmit, no app restart. Verification fails *closed* only on a definitive 407; an unreachable probe host or flaky network never blocks a correct credential (it saves with a note). After a *second* consecutive rejection the error escalates to suggest contacting IT (the account may be locked or its password changed), since by then it's likely more than a typo. Implemented as `verifyProxyCreds` in `proxy.go`.
+- **Show/hide password toggle** on the setup form, so users can confirm what they typed before submitting.
+- **Rise-branded setup pages with a step tracker.** The setup form and the success page now use the Rise Design System (Source Serif / Open Sans, Deep Blue + Primary purple, brand-tinted card shadow, inlined Rise wordmark) and show a 4-step progress tracker — Install the bridge → Enter credentials → Restart Claude → Approve the Metabase sign-in — so the user always sees what's done and what's left. Fonts load from Google Fonts with Georgia/Verdana fallbacks, so the page still renders cleanly offline.
+
 ## [0.2.3] — 2026-06-19
 
 ### Fixed

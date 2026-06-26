@@ -7,8 +7,58 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
+
+// proxyProbeURL is a neutral, IANA-reserved public HTTPS endpoint used only to
+// test that the proxy accepts the user's Basic auth. A forward proxy authenticates
+// the request before attempting egress, so wrong credentials return 407 regardless
+// of whether the probe host itself is reachable. The response body is irrelevant.
+const proxyProbeURL = "https://example.com/"
+
+// verifyProxyCreds round-trips a single request through the proxy with the given
+// credentials to confirm they're accepted. It returns ok=false ONLY on a
+// definitive proxy-auth rejection (HTTP 407); any other outcome — including an
+// unreachable probe host or a flaky network — is treated as "not rejected", so a
+// correct credential is never blocked by something unrelated. note is a
+// human-readable status for the setup form (empty when nothing needs saying).
+func verifyProxyCreds(cfg *SharedConfig) (ok bool, note string) {
+	pURL, err := cfg.proxyURL()
+	if err != nil {
+		return false, "Proxy server looks wrong: " + err.Error()
+	}
+	client, err := newProxiedClient(pURL, cfg.CAFile)
+	if err != nil {
+		return false, err.Error()
+	}
+	client.Timeout = 12 * time.Second
+
+	req, err := http.NewRequest(http.MethodGet, proxyProbeURL, nil)
+	if err != nil {
+		return true, "" // construction shouldn't fail; don't block the user over it
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		if isProxyAuthError(err) {
+			return false, ""
+		}
+		return true, "Saved. Note: couldn't fully reach the test site through the proxy, but your username and password were not rejected — if the connector doesn't come online, re-open this app and double-check them."
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusProxyAuthRequired {
+		return false, ""
+	}
+	return true, ""
+}
+
+// isProxyAuthError reports whether a transport error is a proxy 407 (returned when
+// the proxy rejects the CONNECT for bad/missing Basic auth). The standard library
+// surfaces this as the proxy's status line in the error text.
+func isProxyAuthError(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "proxy authentication required") || strings.Contains(s, "407")
+}
 
 // newProxiedClient builds an *http.Client whose every request is tunnelled
 // through the Rise HTTPS forward proxy.
