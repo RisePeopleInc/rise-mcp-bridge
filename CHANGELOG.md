@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-06-19
+
+### Changed
+
+- **Removed Metabase-specific wording from the generic bridge.** The bridge is shared across any proxy-gated Rise plugin, so it no longer names Metabase anywhere user-facing: the setup page's step tracker drops the "Approve the Metabase sign-in" step (the bridge doesn't know its downstream tool — that step belongs in each consuming plugin's own setup skill) and now shows three generic steps (Install → Enter credentials → Restart). The OAuth flow's browser/tab/timeout messages and the stdio log prefix are genericized too (`[rise-mcp-bridge]`, "Opening your browser to sign in…", "Signed in."). Any per-tool sign-in step now lives only in the plugin's setup skill.
+
 ## [0.2.4] — 2026-06-19
 
 ### Added

@@ -16,7 +16,7 @@ import (
 
 // Pump bridges the two MCP transports:
 //
-//	Claude  <--stdio (newline-delimited JSON-RPC)-->  [this bridge]  <--Streamable HTTP (proxied)-->  Metabase
+//	Claude  <--stdio (newline-delimited JSON-RPC)-->  [this bridge]  <--Streamable HTTP (proxied)-->  MCP server
 //
 // stdin  : JSON-RPC messages from Claude, one per line.
 // stdout : JSON-RPC messages back to Claude, one per line.
@@ -62,7 +62,7 @@ func (p *Pump) Run(ctx context.Context, in io.Reader) error {
 		if err := p.forward(ctx, msg); err != nil {
 			// Surface transport errors on stderr; do not kill the session for a
 			// single failed message.
-			fmt.Fprintf(stderr(), "[rise-metabase] forward error: %v\n", err)
+			fmt.Fprintf(stderr(), "[rise-mcp-bridge] forward error: %v\n", err)
 		}
 	}
 	return scanner.Err()

@@ -19,7 +19,7 @@ import (
 )
 
 // Fixed loopback redirect so the registered redirect_uri exactly matches the one
-// sent at authorize time -- Metabase validates this strictly.
+// sent at authorize time -- the authorization server validates this strictly.
 const (
 	loopbackAddr     = "127.0.0.1:47000"
 	loopbackRedirect = "http://127.0.0.1:47000/callback"
@@ -200,13 +200,13 @@ func loopbackPKCE(ctx context.Context, client *http.Client, conf *oauth2.Config)
 			errCh <- fmt.Errorf("authorization error: %s", e)
 			return
 		}
-		fmt.Fprintln(w, "Rise Metabase connected. You can close this tab and return to Claude.")
+		fmt.Fprintln(w, "Signed in. You can close this tab and return to Claude.")
 		codeCh <- r.URL.Query().Get("code")
 	})}
 	go srv.Serve(ln)
 	defer srv.Close()
 
-	fmt.Fprintf(os.Stderr, "\n[rise-mcp-bridge] Opening your browser to sign in to Metabase...\n  If it doesn't open, visit:\n  %s\n\n", authURL)
+	fmt.Fprintf(os.Stderr, "\n[rise-mcp-bridge] Opening your browser to sign in...\n  If it doesn't open, visit:\n  %s\n\n", authURL)
 	openBrowser(authURL)
 
 	select {
@@ -215,7 +215,7 @@ func loopbackPKCE(ctx context.Context, client *http.Client, conf *oauth2.Config)
 	case err := <-errCh:
 		return nil, err
 	case <-time.After(5 * time.Minute):
-		return nil, fmt.Errorf("timed out waiting for Metabase authorization")
+		return nil, fmt.Errorf("timed out waiting for sign-in authorization")
 	}
 }
 

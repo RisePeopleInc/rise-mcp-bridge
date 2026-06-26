@@ -104,11 +104,13 @@ type successView struct {
 // current, earlier ones done, later ones to-do. The same list renders on both
 // pages so the user always sees the whole journey and what remains.
 func steps(current int) []wizStep {
+	// Generic across every consuming plugin — the bridge doesn't know (or name) the
+	// downstream tool. Any per-tool step (e.g. approving an OAuth sign-in on first
+	// connect) belongs in that plugin's own setup skill, not here.
 	titles := []string{
 		"Install the Rise bridge",
 		"Enter your proxy credentials",
 		"Restart Claude or start a new chat",
-		"Approve the Metabase sign-in",
 	}
 	out := make([]wizStep, len(titles))
 	for i, t := range titles {
@@ -203,7 +205,7 @@ var successPage = template.Must(template.New("success").Parse(brandHead + `<body
 <div class="logo">{{.Logo}}</div>
 <span class="check">&#10003;</span>
 <h1>You’re connected</h1>
-<p class="lead">Your proxy credentials checked out and the Rise bridge is set up. Two things left:</p>
+<p class="lead">Your proxy credentials checked out and the Rise bridge is set up. One last step:</p>
 <hr class="div">
 <p class="overline">What’s next</p>
 ` + stepsBlock + `
