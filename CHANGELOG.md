@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.7] — 2026-07-02
+
+### Fixed
+
+- **Windows: the connector never started because the launch path didn't resolve.** Two Windows-specific problems in how a plugin's `.mcp.json` launches the bridge: (1) `${HOME}` is not set on Windows (only `%USERPROFILE%`), so a `${HOME}`-based command resolved to a broken path; and (2) Windows does not auto-append `.exe`, so a command ending in `rise-mcp-bridge` couldn't find the installed `rise-mcp-bridge.exe`. Result: `spawn ENOENT`, no tools, and misleading "is the bridge running?" advice. macOS was unaffected.
+  - **Bridge fix:** `selfInstall` now installs the binary under a **uniform name — `rise-mcp-bridge.exe` — on every OS** (macOS/Linux run a Mach-O/ELF regardless of extension), with a back-compat `rise-mcp-bridge` symlink on macOS/Linux. This lets one cross-platform `.mcp.json` command reference `…/rise-mcp-bridge.exe`.
+  - **Consuming plugins** should launch the bridge with a command that resolves the home directory on both platforms — e.g. `${HOME}${USERPROFILE}/.rise-mcp-bridge/rise-mcp-bridge.exe` (exactly one of the two vars is set per OS; the other expands to empty).
+
 ## [0.2.6] — 2026-06-19
 
 ### Changed

@@ -278,9 +278,9 @@ func setupHandler(configDir, prefHost, prefUser string, done chan<- error) http.
 	return mux
 }
 
-// selfInstall copies the running executable into configDir as rise-mcp-bridge[.exe]
-// so a plugin's .mcp.json can launch it from the stable location. No-op if already
-// running from there.
+// selfInstall copies the running executable into configDir as rise-mcp-bridge.exe
+// (uniform name on every OS) so a plugin's .mcp.json can launch it from the stable
+// location with one cross-platform command. No-op if already running from there.
 func selfInstall(configDir string) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -300,11 +300,12 @@ func selfInstall(configDir string) error {
 			self = payload
 		}
 	}
-	name := "rise-mcp-bridge"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	dest := filepath.Join(configDir, name)
+	// Install under a single, uniform name — rise-mcp-bridge.exe — on every OS.
+	// Windows needs the .exe to launch; macOS/Linux run a Mach-O/ELF regardless of
+	// its name. A uniform name lets ONE plugin .mcp.json command
+	// (…/rise-mcp-bridge.exe) work cross-platform, side-stepping the fact that
+	// Windows won't auto-append .exe to an extension-less command.
+	dest := filepath.Join(configDir, "rise-mcp-bridge.exe")
 	if d, e := filepath.EvalSymlinks(dest); e == nil && d == self {
 		return nil
 	}
@@ -331,6 +332,13 @@ func selfInstall(configDir string) error {
 		return err
 	}
 	dequarantine(dest)
+	// Back-compat: earlier configs launched the extension-less name on macOS/Linux.
+	// Keep that path working with a symlink to the uniform .exe.
+	if runtime.GOOS != "windows" {
+		legacy := filepath.Join(configDir, "rise-mcp-bridge")
+		_ = os.Remove(legacy)
+		_ = os.Symlink("rise-mcp-bridge.exe", legacy)
+	}
 	return nil
 }
 
