@@ -29,6 +29,7 @@ func runSetup(configDir string) error {
 	if err := selfInstall(configDir); err != nil {
 		fmt.Fprintf(os.Stderr, "[rise-mcp-bridge] note: could not self-install the binary (%v); continuing with config only\n", err)
 	}
+	ensureWindowsHome()
 
 	existing, _ := loadShared(configDir)
 	prefHost := defaultProxyHost
@@ -65,7 +66,7 @@ func runSetup(configDir string) error {
 	}
 
 	revealFolder(configDir)
-	fmt.Fprintf(os.Stderr, "[rise-mcp-bridge] Setup complete (%s). Reload the plugin (/reload-plugins) or start a new session.\n", configDir)
+	fmt.Fprintf(os.Stderr, "[rise-mcp-bridge] Setup complete (%s). Fully quit and reopen Claude, then start a new chat.\n", configDir)
 	return nil
 }
 
@@ -110,7 +111,7 @@ func steps(current int) []wizStep {
 	titles := []string{
 		"Install the Rise bridge",
 		"Enter your proxy credentials",
-		"Open a new chat in Claude",
+		"Quit and reopen Claude, then a new chat",
 	}
 	out := make([]wizStep, len(titles))
 	for i, t := range titles {
@@ -210,7 +211,7 @@ var successPage = template.Must(template.New("success").Parse(brandHead + `<body
 <p class="overline">What’s next</p>
 ` + stepsBlock + `
 {{if .Note}}<p class="note">{{.Note}}</p>{{end}}
-<p class="lead" style="margin-top:20px">Close this tab and <b>open a new chat in Claude</b> — start fresh rather than returning to the chat you set this up in, which stays disconnected even after a restart.</p>
+<p class="lead" style="margin-top:20px">Close this tab, <b>fully quit Claude and reopen it</b>, then start a <b>new chat</b>. A new chat is required (an existing one stays disconnected); on Windows the quit-and-reopen is also what lets Claude find the bridge.</p>
 </div>
 </body></html>`))
 
@@ -340,6 +341,28 @@ func selfInstall(configDir string) error {
 		_ = os.Symlink("rise-mcp-bridge.exe", legacy)
 	}
 	return nil
+}
+
+// ensureWindowsHome makes ${HOME} usable on Windows. Windows sets USERPROFILE, not
+// HOME, so a plugin's .mcp.json command that uses ${HOME} (which works on macOS)
+// resolves to nothing on Windows and the bridge is never found. We install under the
+// user profile, so point HOME there via a persistent user env var (setx). Processes
+// launched AFTER this — i.e. Claude once fully quit and reopened — inherit it.
+// No-op off Windows, or if HOME is already set (we then install to that HOME instead;
+// see defaultConfigDir).
+func ensureWindowsHome() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	if strings.TrimSpace(os.Getenv("HOME")) != "" {
+		return // already set; defaultConfigDir installs to it, so they agree
+	}
+	up := strings.TrimSpace(os.Getenv("USERPROFILE"))
+	if up == "" {
+		return
+	}
+	_ = exec.Command("setx", "HOME", up).Run()
+	fmt.Fprintf(os.Stderr, "[rise-mcp-bridge] set HOME=%s so Claude can find the bridge — fully quit and reopen Claude.\n", up)
 }
 
 // dequarantine strips com.apple.quarantine from a file we just installed. macOS

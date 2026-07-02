@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.8] — 2026-07-02
+
+### Fixed
+
+- **Windows: `${HOME}` now resolves so the connector actually launches.** v0.2.7 fixed the `.exe` name but left the other half: `${HOME}` (what a plugin's `.mcp.json` uses, and what works on macOS) is unset on Windows, and Cowork does *not* blank out an undefined variable — so tricks like `${HOME}${USERPROFILE}` leave the literal text in the path and fail. Setup now runs `setx HOME %USERPROFILE%` on Windows so `${HOME}` resolves there the way it does on macOS. `defaultConfigDir` also honors an existing `HOME` on Windows so the install location always matches what `${HOME}` expands to.
+  - **Consuming plugins** should use plain `${HOME}/.rise-mcp-bridge/rise-mcp-bridge.exe` (works on macOS natively; works on Windows after setup sets HOME). Do **not** use `${USERPROFILE}` or `${HOME}${USERPROFILE}` — undefined vars aren't blanked, so those break the platform where the var is undefined.
+  - Setup guidance now says to **fully quit and reopen Claude, then start a new chat** — the relaunch is what lets Claude pick up the newly-set `HOME` on Windows (and a new chat is required regardless).
+
 ## [0.2.7] — 2026-07-02
 
 ### Fixed

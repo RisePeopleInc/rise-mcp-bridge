@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -33,6 +34,16 @@ type SharedConfig struct {
 func defaultConfigDir() string {
 	if v := strings.TrimSpace(os.Getenv("RISE_MCP_BRIDGE_CONFIG_DIR")); v != "" {
 		return v
+	}
+	// On Windows, ${HOME} is what a plugin's .mcp.json expands (it works on macOS);
+	// Windows normally has only USERPROFILE. Install where ${HOME} will point so the
+	// two always agree: prefer an explicitly-set HOME, else fall back to the user
+	// profile (os.UserHomeDir uses USERPROFILE on Windows). The setup step sets HOME
+	// to the user profile when it isn't already set — see ensureWindowsHome.
+	if runtime.GOOS == "windows" {
+		if h := strings.TrimSpace(os.Getenv("HOME")); h != "" {
+			return filepath.Join(h, ".rise-mcp-bridge")
+		}
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		return filepath.Join(home, ".rise-mcp-bridge")
