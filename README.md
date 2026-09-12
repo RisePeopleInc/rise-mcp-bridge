@@ -25,18 +25,48 @@ proxy itself* (TLS-in-TLS). Go's `http.Transport` supports `https://` proxies
 natively (`proxy.go`), sidestepping the TLS-in-TLS limitations of many Node HTTP
 clients, and ships as a single dependency-free binary.
 
+## How a plugin launches it
+
+A consuming plugin's `.mcp.json` runs the installed bridge from the user's home
+directory and passes its own endpoint:
+
+```json
+{
+  "mcpServers": {
+    "my-tool": {
+      "command": "${HOME:-}${USERPROFILE:-}/.rise-mcp-bridge/rise-mcp-bridge.exe",
+      "args": ["--mcp-endpoint", "https://tool.internal.example/mcp", "--auth", "oauth"]
+    }
+  }
+}
+```
+
+The odd-looking command is deliberate. The Claude **desktop app** expands only a
+per-OS safelist of host variables in plugin server commands — `HOME` on
+macOS/Linux, `USERPROFILE` on Windows (never `HOME`, even if set) — and leaves any
+other `${VAR}` as literal text. The `${VAR:-default}` form blanks a variable that
+is off the safelist, so exactly one of the two expands on each OS. The binary is
+installed under the uniform name `rise-mcp-bridge.exe` on every OS (macOS runs a
+Mach-O regardless of extension) so one command string works everywhere.
+`${CLAUDE_PLUGIN_DATA}` is *not* expanded by the desktop host and cannot be used.
+
 ## Configuration
 
-Per-user `config.json` in the config dir (`${CLAUDE_PLUGIN_DATA}`), written by the
-consuming plugin's setup skill — never committed:
+Per-user `config.json` in the config dir (`~/.rise-mcp-bridge`; override with
+`RISE_MCP_BRIDGE_CONFIG_DIR` or `--config-dir`), written by the bridge's own
+setup flow (double-click the installer app) — never committed:
 
 | field | meaning |
 |---|---|
-| `mcp_endpoint` | full URL of the remote Streamable-HTTP MCP endpoint |
-| `proxy_url` | `https://USER:PASS@host:port` (URL-encoded creds; https only) |
-| `auth` | `oauth` (default) · `bearer` · `none` |
-| `bearer_token` | used when `auth: bearer` |
+| `proxy_host` | Rise HTTPS proxy `host:port` (pre-filled in the setup form) |
+| `proxy_user` / `proxy_pass` | the user's proxy credentials, stored raw (the bridge percent-encodes them) |
 | `ca_file` | optional PEM bundle for upstream TLS (internal CA) |
+
+The target MCP endpoint and auth mode are **not** stored: each consuming plugin
+passes `--mcp-endpoint` and `--auth` (`oauth` default · `bearer` · `none`) per
+launch, so one install and one credential prompt serve any number of plugins.
+OAuth tokens and dynamic client registrations are cached per endpoint in the same
+dir.
 
 ## Releases & distribution
 
