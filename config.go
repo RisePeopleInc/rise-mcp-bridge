@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -35,20 +36,37 @@ func defaultConfigDir() string {
 	if v := strings.TrimSpace(os.Getenv("RISE_MCP_BRIDGE_CONFIG_DIR")); v != "" {
 		return v
 	}
-	// On Windows, ${HOME} is what a plugin's .mcp.json expands (it works on macOS);
-	// Windows normally has only USERPROFILE. Install where ${HOME} will point so the
-	// two always agree: prefer an explicitly-set HOME, else fall back to the user
-	// profile (os.UserHomeDir uses USERPROFILE on Windows). The setup step sets HOME
-	// to the user profile when it isn't already set — see ensureWindowsHome.
-	if runtime.GOOS == "windows" {
-		if h := strings.TrimSpace(os.Getenv("HOME")); h != "" {
-			return filepath.Join(h, ".rise-mcp-bridge")
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
+	// Must agree with what the consuming plugin's .mcp.json expands to. The Claude
+	// desktop app only substitutes a per-OS safelist of host variables into a plugin
+	// server command — HOME on macOS/Linux, USERPROFILE on Windows (never HOME) — so
+	// plugins launch `${HOME:-}${USERPROFILE:-}/.rise-mcp-bridge/rise-mcp-bridge.exe`.
+	// os.UserHomeDir reads exactly those variables (HOME / USERPROFILE), so install
+	// and launch always resolve to the same directory. A user-set HOME on Windows is
+	// deliberately ignored: the host never expands it there.
+	if home := userHome(); home != "" {
 		return filepath.Join(home, ".rise-mcp-bridge")
 	}
 	return ".rise-mcp-bridge"
+}
+
+// userHome resolves the user's home the same way the Claude host does when it
+// expands ${HOME} / ${USERPROFILE}, with an OS-account lookup as a last resort for
+// hosts that spawn us with a stripped environment.
+func userHome() string {
+	if runtime.GOOS == "windows" {
+		if h := strings.TrimSpace(os.Getenv("USERPROFILE")); h != "" {
+			return h
+		}
+	} else if h := strings.TrimSpace(os.Getenv("HOME")); h != "" {
+		return h
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return home
+	}
+	if u, err := user.Current(); err == nil && strings.TrimSpace(u.HomeDir) != "" {
+		return u.HomeDir
+	}
+	return ""
 }
 
 func configPath(dir string) string { return filepath.Join(dir, "config.json") }

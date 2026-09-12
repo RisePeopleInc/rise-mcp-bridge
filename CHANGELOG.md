@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.9] — 2026-09-12
+
+### Fixed
+
+- **Windows (Claude desktop app): the connector never launched — root cause found and fixed on the plugin side.** The desktop app does *not* expand arbitrary host variables in a plugin's `.mcp.json`; it substitutes only a **per-OS safelist** (the MCP SDK's default inherited environment): `HOME, LOGNAME, PATH, SHELL, TERM, USER` on macOS/Linux and `APPDATA, HOMEDRIVE, HOMEPATH, LOCALAPPDATA, PATH, PROCESSOR_ARCHITECTURE, SYSTEMDRIVE, SYSTEMROOT, TEMP, USERNAME, USERPROFILE, PROGRAMFILES` on Windows. `${HOME}` is therefore expanded on macOS but **left as literal text on Windows regardless of whether HOME is set** (the desktop log says `config references environment variables outside the MCP stdio safelist: HOME — left unexpanded`). Setting `HOME` via `setx` (v0.2.8) could never help. The same substitution code honours the shell-style default form `${VAR:-default}` for variables that are off the safelist, so a single command works on both platforms:
+  - **Consuming plugins** must launch `${HOME:-}${USERPROFILE:-}/.rise-mcp-bridge/rise-mcp-bridge.exe`. Exactly one of the two variables is on each OS's safelist; the `:-` default blanks the other. (`${HOME}${USERPROFILE}` without defaults does *not* work — an off-safelist variable is kept literal, not blanked; that was the v0.2.7 mistake.) Verified against the desktop app's own substitution logic (build 1.52386.3, identical on macOS and Windows). `${CLAUDE_PLUGIN_DATA}` is never expanded by the desktop host, so it is not an alternative.
+  - **Bridge:** removed `ensureWindowsHome` (`setx HOME`) — it mutated the user's environment for no benefit. `defaultConfigDir` on Windows now follows `USERPROFILE` (what the host actually expands) and ignores a user-set `HOME`, so install location and launch path can never disagree. Added an OS-account (`os/user`) fallback for hosts that spawn the bridge with a stripped environment.
+  - **Setup copy:** the last step is again just "start a new chat in Claude" — quitting and reopening the app is not needed on either OS.
+- Corrects the v0.2.7/v0.2.8 guidance below: the `${HOME}` launch model was never broken on macOS (the desktop expands `HOME` there); it was Windows-only, and the fix is the `:-` default syntax in the plugin's `.mcp.json`, not anything in the user's environment.
+
 ## [0.2.8] — 2026-07-02
 
 ### Fixed
