@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.10] — 2026-09-14
+
+### Fixed
+
+- **First-time sign-in failed with `invalid_request` ("The authorization request is invalid.").** The bridge asked for every scope in the authorization server's `scopes_supported`. On Metabase ≥ 0.63 that list includes `mb:full` (its REST-API scope), which the MCP resource does not accept and a dynamically-registered client may not request; the server's OAuth library rejects the whole authorize request with a bare "Invalid scope", which Metabase surfaces as `invalid_request`. Existing installs never hit this because a cached token only refreshes. The bridge now reads the MCP endpoint's **RFC 9728 protected-resource metadata** (from the `resource_metadata` URL in the 401 challenge, or the well-known path) and requests exactly the scopes that resource advertises, falling back to the auth server's list, then the built-in agent scopes. It also sends the **RFC 8707 `resource` indicator** on the authorize and token requests when the resource is known.
+- **Sign-in no longer dies with the MCP host's connect timeout.** The Claude desktop app gives a server 60–120 s to answer its first request and then kills it; a browser sign-in through a corporate proxy routinely takes longer, and killing the bridge orphaned the browser tab (and each retry opened another). Sign-in now runs in a **detached helper process** (`rise-mcp-bridge --login --mcp-endpoint URL`) with its own session/process group and no inherited stdio, logging to `<config-dir>/login-<key>.log`. The server process waits for the token file; if the host kills it first, the helper finishes anyway and the next launch (a new chat) connects instantly. The loopback callback port doubles as a lock, so a second launch while a sign-in is pending waits instead of opening another tab. Run by hand in a terminal, sign-in still happens inline. Sign-in timeout raised from 5 to 15 minutes. Token file writes are atomic.
+
+### Added
+
+- `--login --mcp-endpoint URL` mode to pre-authorize an endpoint from a terminal (writes the token and exits).
+
 ## [0.2.9] — 2026-09-12
 
 ### Fixed
