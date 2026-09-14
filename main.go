@@ -26,7 +26,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const version = "0.2.9"
+const version = "0.2.10"
 
 func stderr() *os.File { return os.Stderr }
 
@@ -37,6 +37,7 @@ func main() {
 	bearerTok := flag.String("bearer-token", "", "token when --auth=bearer")
 	caFile := flag.String("ca-file", "", "optional PEM bundle to trust for the upstream TLS")
 	setup := flag.Bool("setup", false, "run interactive setup (install + collect proxy credentials)")
+	login := flag.Bool("login", false, "sign in to --mcp-endpoint in the browser and cache the token, then exit (used by the detached sign-in helper; also handy to pre-authorize)")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -49,6 +50,9 @@ func main() {
 	case *setup, launchedFromAppBundle():
 		// Explicit --setup, or launched by double-clicking the installer .app.
 		runOrDie(runSetup(*configDir), "setup")
+	case *login && *mcpEndpoint != "":
+		// Detached sign-in helper (spawned by server mode), or a manual pre-authorize.
+		runOrDie(runLogin(*configDir, *mcpEndpoint, *caFile), "sign-in")
 	case *mcpEndpoint != "":
 		// Server mode — how a plugin's .mcp.json launches it.
 		runOrDie(runServer(*configDir, *mcpEndpoint, *authMode, *bearerTok, *caFile), "fatal")
@@ -126,7 +130,7 @@ func runServer(configDir, mcpEndpoint, authMode, bearerTok, caFile string) error
 	var ts oauth2.TokenSource
 	switch authMode {
 	case "oauth":
-		ts, err = Authenticate(ctx, client, mcpEndpoint, tokenStore{dir: configDir, key: endpointKey(mcpEndpoint)})
+		ts, err = Authenticate(ctx, client, mcpEndpoint, tokenStore{dir: configDir, key: endpointKey(mcpEndpoint)}, stdinIsInteractive(), caFile)
 		if err != nil {
 			return fmt.Errorf("authentication: %w", err)
 		}

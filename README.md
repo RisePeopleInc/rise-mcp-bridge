@@ -50,6 +50,21 @@ installed under the uniform name `rise-mcp-bridge.exe` on every OS (macOS runs a
 Mach-O regardless of extension) so one command string works everywhere.
 `${CLAUDE_PLUGIN_DATA}` is *not* expanded by the desktop host and cannot be used.
 
+## Sign-in (OAuth)
+
+On first use for an endpoint the bridge signs the user in through the browser
+(authorization code + PKCE, loopback redirect on `127.0.0.1:47000`). Scopes are
+taken from the endpoint's RFC 9728 protected-resource metadata, and the RFC 8707
+`resource` indicator is sent, so the request asks only for what that MCP surface
+accepts. When launched by an MCP host, the browser flow runs in a **detached
+helper process** so the host's connect timeout cannot kill it: if Claude gives up
+waiting, finish signing in anyway and start a new chat. Helper output goes to
+`<config-dir>/login-<key>.log`. To pre-authorize from a terminal:
+
+```bash
+~/.rise-mcp-bridge/rise-mcp-bridge.exe --login --mcp-endpoint https://tool.internal.example/mcp
+```
+
 ## Configuration
 
 Per-user `config.json` in the config dir (`~/.rise-mcp-bridge`; override with
