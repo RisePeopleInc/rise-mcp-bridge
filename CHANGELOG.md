@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.11] — 2026-09-14
+
+### Changed
+
+- **Setup pages rewritten for clarity, with explicit "fully quit Claude" instructions.** Windows validation showed the decisive step after install is *fully* quitting Claude — closing the window leaves it running in the system tray, and a tray-resident Claude never notices the new bridge. The success page is now "Credentials saved" followed by two numbered panels: **Step 3 — Check your browser can open Metabase** (SmartProxy on in Chrome, link to the setup guide, an "Open Metabase ↗" button) and **Step 4 — Fully quit Claude, then reopen it** with per-OS directions (Windows: tray icon → Quit, or Task Manager → End task; Mac: ⌘Q / Claude → Quit Claude), then start a new chat and approve the sign-in tab. The progress tracker gains the same two steps. Vague references to "the tool" are replaced by the tool's name (rendered from `proxyGatedTools`, so a second plugin reads naturally). The credentials page carries a one-line heads-up that these two steps follow.
+
 ## [0.2.10] — 2026-09-14
 
 ### Fixed
