@@ -6,11 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.12] — 2026-09-15
+
+### Fixed
+
+- **Mac quit instruction now works when the Claude window is already closed.** 0.2.11 said "click the Claude window, then ⌘Q" — but the point of the step is that the window may be gone, and ⌘Q from another app quits that app. The page now says to right-click the Claude icon in the Dock and choose Quit (or click it to bring Claude forward, then ⌘Q), and to quit once more if the icon lingers.
+- **Restored the sentence explaining that the chat Claude reopens with will not connect** — only a new chat does (dropped in 0.2.11; the failure it guards against was field-tested in 0.2.6).
+- **Credentials page keeps a link to the SmartProxy setup guide.** 0.2.11 moved every link to the success page, which a user without SmartProxy (and therefore without proxy credentials) can never reach.
+- Browser-check copy reads correctly for more than one tool ("click each button", "a sign-in page for …"); stale comment claiming the bridge never names the tool replaced with the actual rationale; the quit-panel comment records the observed Windows evidence rather than asserting a mechanism.
+
+### Changed
+
+- Setup views share one `pageCommon` struct built by `newPage`, so no render site can omit a field; the render test asserts the key phrases are present. Dead CSS removed.
+
 ## [0.2.11] — 2026-09-14
 
 ### Changed
 
-- **Setup pages rewritten for clarity, with explicit "fully quit Claude" instructions.** Windows validation showed the decisive step after install is *fully* quitting Claude — closing the window leaves it running in the system tray, and a tray-resident Claude never notices the new bridge. The success page is now "Credentials saved" followed by two numbered panels: **Step 3 — Check your browser can open Metabase** (SmartProxy on in Chrome, link to the setup guide, an "Open Metabase ↗" button) and **Step 4 — Fully quit Claude, then reopen it** with per-OS directions (Windows: tray icon → Quit, or Task Manager → End task; Mac: ⌘Q / Claude → Quit Claude), then start a new chat and approve the sign-in tab. The progress tracker gains the same two steps. Vague references to "the tool" are replaced by the tool's name (rendered from `proxyGatedTools`, so a second plugin reads naturally). The credentials page carries a one-line heads-up that these two steps follow.
+- **Setup pages rewritten around what Windows validation showed matters: fully quitting Claude.** Closing the window leaves Claude in the system tray, and it did not pick up the new bridge until it was ended from Task Manager. The success page is now "Credentials saved" followed by two numbered panels — **Step 3: check your browser can open Metabase** (SmartProxy on, guide link, "Open Metabase ↗" button) and **Step 4: fully quit Claude, then reopen it** with per-OS directions — then a new chat and the sign-in tab. Steps 3 and 4 of the progress tracker are retitled to match. The tool is named (from `proxyGatedTools`) instead of "the tool". The credentials page gets a one-line heads-up. **This supersedes 0.2.9's "quitting and reopening the app is not needed"** — that held on macOS in testing but not on Windows — and knowingly names Metabase in the tracker, reversing 0.2.5, because users need to see the concrete tool.
 
 ## [0.2.10] — 2026-09-14
 

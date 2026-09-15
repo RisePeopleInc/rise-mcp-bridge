@@ -3,32 +3,38 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// TestRenderSetupPages executes both setup templates with realistic data and
-// writes the HTML to RENDER_OUT (when set) so they can be eyeballed in a browser.
+// TestRenderSetupPages executes both setup templates with real data, checks the
+// key user-facing phrases are present, and (when RENDER_OUT is set) writes the
+// HTML so the pages can be eyeballed in a browser.
 func TestRenderSetupPages(t *testing.T) {
 	out := os.Getenv("RENDER_OUT")
-	form := filepath.Join(t.TempDir(), "form.html")
-	success := filepath.Join(t.TempDir(), "success.html")
-	if out != "" {
-		form, success = filepath.Join(out, "form.html"), filepath.Join(out, "success.html")
+	if out == "" {
+		out = t.TempDir()
 	}
-	f, err := os.Create(form)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := setupPage.Execute(f, setupView{Logo: riseLogo, Host: defaultProxyHost, User: "steve_bond", Steps: steps(2), Tools: proxyGatedTools, ToolNames: toolNames(), ProxyHowTo: proxyHowToURL}); err != nil {
+	var form, success strings.Builder
+	if err := setupPage.Execute(&form, setupView{pageCommon: newPage(2), Host: defaultProxyHost, User: "steve_bond"}); err != nil {
 		t.Fatalf("setup page: %v", err)
 	}
-	f.Close()
-	g, err := os.Create(success)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := successPage.Execute(g, successView{Logo: riseLogo, Steps: steps(3), Tools: proxyGatedTools, ToolNames: toolNames(), ProxyHowTo: proxyHowToURL}); err != nil {
+	if err := successPage.Execute(&success, successView{pageCommon: newPage(3), Note: "note"}); err != nil {
 		t.Fatalf("success page: %v", err)
 	}
-	g.Close()
+	for _, want := range []string{"how to set up SmartProxy", "fully quit and reopened"} {
+		if !strings.Contains(form.String(), want) {
+			t.Errorf("setup page missing %q", want)
+		}
+	}
+	for _, want := range []string{"Open Metabase", "Check your browser can open Metabase", "Fully quit Claude, then reopen it", "Claude icon in the Dock", "Task Manager", "will <b>not</b> connect", "class=\"note\">note"} {
+		if !strings.Contains(success.String(), want) {
+			t.Errorf("success page missing %q", want)
+		}
+	}
+	for name, html := range map[string]string{"form.html": form.String(), "success.html": success.String()} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte(html), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
