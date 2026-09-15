@@ -65,7 +65,7 @@ func runSetup(configDir string) error {
 	}
 
 	revealFolder(configDir)
-	fmt.Fprintf(os.Stderr, "[rise-mcp-bridge] Setup complete (%s). Make sure SmartProxy is on in your browser, then start a new chat in Claude to connect.\n", configDir)
+	fmt.Fprintf(os.Stderr, "[rise-mcp-bridge] Setup complete (%s). Check SmartProxy is on in your browser, then FULLY quit Claude (Windows: tray icon > Quit, or Task Manager > End task; Mac: Cmd+Q), reopen it and start a new chat.\n", configDir)
 	return nil
 }
 
@@ -92,6 +92,22 @@ var proxyGatedTools = []struct{ Name, URL string }{
 // proxyHowToURL explains installing/enabling SmartProxy for the Rise proxy.
 const proxyHowToURL = "https://risepeople.atlassian.net/wiki/spaces/RD/pages/4253057054/AWS+Rise+Proxy"
 
+// toolNames renders the proxy-gated tools as prose: "Metabase", or "Metabase or Foo".
+func toolNames() string {
+	names := make([]string, 0, len(proxyGatedTools))
+	for _, t := range proxyGatedTools {
+		names = append(names, t.Name)
+	}
+	switch len(names) {
+	case 0:
+		return "the tool"
+	case 1:
+		return names[0]
+	default:
+		return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+	}
+}
+
 // wizStep is one row of the setup progress tracker.
 type wizStep struct {
 	N     int
@@ -105,6 +121,7 @@ type setupView struct {
 	Host, User, Error string
 	Steps             []wizStep
 	Tools             []struct{ Name, URL string }
+	ToolNames         string
 	ProxyHowTo        string
 }
 type successView struct {
@@ -112,6 +129,7 @@ type successView struct {
 	Note       string
 	Steps      []wizStep
 	Tools      []struct{ Name, URL string }
+	ToolNames  string
 	ProxyHowTo string
 }
 
@@ -125,8 +143,8 @@ func steps(current int) []wizStep {
 	titles := []string{
 		"Install the Rise bridge",
 		"Enter your proxy credentials",
-		"Turn on SmartProxy in your browser and open the tool",
-		"Start a new chat in Claude",
+		"Check your browser can open " + toolNames(),
+		"Fully quit and reopen Claude, then start a new chat",
 	}
 	out := make([]wizStep, len(titles))
 	for i, t := range titles {
@@ -173,6 +191,15 @@ input:focus{outline:none;border-color:#555DF2;box-shadow:0 0 0 3px rgba(85,93,24
 .warn{font-size:14px;line-height:20px;color:#2B333A;margin:18px 0 0;padding:13px 14px;border:1px solid #F0B37E;border-radius:8px;background:#FFF4E5}
 .warn b{color:#0F151B}
 .warn a{color:#555DF2;font-weight:600}
+.panel{margin:18px 0 0;padding:16px 18px;border:1px solid #E1E6EF;border-radius:10px;background:#F8FAFD}
+.panel h2{font-family:inherit;font-size:16px;line-height:24px;font-weight:700;color:#0F151B;margin:0 0 6px}
+.panel p{font-size:14px;line-height:22px;color:#2B333A;margin:0 0 8px}
+.panel ol,.panel ul{font-size:14px;line-height:22px;color:#2B333A;margin:0 0 8px;padding-left:22px}
+.panel li{margin:0 0 6px}
+.panel a{color:#555DF2;font-weight:600}
+.panel .toolbtn{margin:4px 8px 4px 0}
+.panel .hint{font-size:13px;line-height:20px;color:#555C61;margin:6px 0 0}
+kbd{font-family:inherit;font-size:13px;padding:1px 6px;border:1px solid #CBCFD9;border-bottom-width:2px;border-radius:5px;background:#fff}
 .toolbtn{display:inline-block;margin:10px 8px 0 0;padding:9px 14px;font-size:14px;font-weight:600;font-family:inherit;border:1px solid #555DF2;border-radius:8px;background:#fff;color:#555DF2;text-decoration:none}
 .toolbtn:hover{background:#F2F5FB}
 .overline{font-size:12px;line-height:16px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#09247C;margin:0 0 8px}
@@ -188,10 +215,34 @@ input:focus{outline:none;border-color:#555DF2;box-shadow:0 0 0 3px rgba(85,93,24
 .check{display:inline-flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:50%;background:#C8F1DA;color:#42BD79;font-size:24px;font-weight:700;margin-bottom:14px}
 </style></head>`
 
-// browserCheck is the shared "your browser must go through the proxy" panel. The
-// tool's sign-in page loads in the browser, not in the bridge, so without
-// SmartProxy on, sign-in fails even though the bridge's own credentials are fine.
-const browserCheck = `<div class="warn"><b>Before Claude connects:</b> the sign-in opens in your browser, so your browser must also go through the Rise proxy. Make sure the <b>SmartProxy</b> extension is installed and switched on in Chrome (<a href="{{.ProxyHowTo}}" target="_blank" rel="noopener">how to set it up ↗</a>), then confirm the tool opens for you — sign-in will fail if it doesn't:<br>{{range .Tools}}<a class="toolbtn" href="{{.URL}}" target="_blank" rel="noopener">Open {{.Name}} ↗</a>{{end}}</div>`
+// formHeadsUp is the short note under the credentials form; the full
+// instructions live on the success page so the user reads them once, in order.
+const formHeadsUp = `<div class="warn"><b>After you save:</b> two more steps are needed before Claude can connect — your browser must use the Rise proxy (SmartProxy), and Claude must be <b>fully quit and reopened</b>. The next page walks you through both.</div>`
+
+// browserPanel: the tool's sign-in page loads in the user's browser, so the
+// browser itself must go through the Rise proxy or sign-in fails.
+const browserPanel = `<div class="panel">
+<h2>Step 3 — Check your browser can open {{.ToolNames}}</h2>
+<p>The first time Claude connects, a <b>{{.ToolNames}} sign-in page</b> opens in your browser. That page only loads if your browser goes through the Rise proxy.</p>
+<ol>
+<li>Make sure the <b>SmartProxy</b> extension is installed and turned <b>on</b> in Chrome. <a href="{{.ProxyHowTo}}" target="_blank" rel="noopener">How to set up SmartProxy ↗</a></li>
+<li>Click the button and check that the page opens:<br>{{range .Tools}}<a class="toolbtn" href="{{.URL}}" target="_blank" rel="noopener">Open {{.Name}} ↗</a>{{end}}</li>
+</ol>
+<p class="hint">If it doesn’t open, fix SmartProxy before going on. The sign-in cannot succeed until it does.</p>
+</div>`
+
+// quitPanel: Claude only notices a newly installed bridge when it is fully quit
+// and reopened. Closing the window is not enough on Windows (tray) or macOS (Dock).
+const quitPanel = `<div class="panel">
+<h2>Step 4 — Fully quit Claude, then reopen it</h2>
+<p>Closing the Claude window is <b>not</b> enough — Claude keeps running in the background and won’t notice the bridge.</p>
+<ul>
+<li><b>Windows:</b> right-click the Claude icon in the system tray (bottom-right, near the clock) and choose <b>Quit</b>. If you can’t find it, open Task Manager (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd>), select <b>Claude</b>, and click <b>End task</b>.</li>
+<li><b>Mac:</b> click the Claude window, then press <kbd>⌘</kbd>+<kbd>Q</kbd> (or choose <b>Claude → Quit Claude</b> from the menu bar).</li>
+</ul>
+<p>Then open Claude again and <b>start a new chat</b>. A {{.ToolNames}} sign-in tab will open in your browser — approve it.</p>
+<p class="hint">If Claude stops waiting before you finish signing in, that’s fine: finish the sign-in, then start another new chat.</p>
+</div>`
 
 // stepsBlock is the shared progress-tracker markup, ranged over .Steps.
 const stepsBlock = `<ol class="steps">{{range .Steps}}<li class="step {{.State}}"><span class="badge">{{if eq .State "done"}}&#10003;{{else}}{{.N}}{{end}}</span><span class="steptitle">{{.Title}}</span></li>{{end}}</ol>`
@@ -209,7 +260,7 @@ var setupPage = template.Must(template.New("setup").Parse(brandHead + `<body>
 <div class="pwwrap"><input id="pass" name="pass" type="password"><button type="button" id="pwtoggle" class="pwtoggle">Show</button></div>
 <button type="submit" class="primary">Save &amp; connect</button>
 </form>
-` + browserCheck + `
+` + formHeadsUp + `
 <hr class="div">
 <p class="overline">Setup steps</p>
 ` + stepsBlock + `
@@ -231,14 +282,13 @@ var successPage = template.Must(template.New("success").Parse(brandHead + `<body
 <div class="card">
 <div class="logo">{{.Logo}}</div>
 <span class="check">&#10003;</span>
-<h1>You’re connected</h1>
-<p class="lead">Your proxy credentials checked out and the Rise bridge is set up. Two last steps:</p>
-` + browserCheck + `
+<h1>Credentials saved</h1>
+<p class="lead">Your proxy credentials checked out and the Rise bridge is installed. Two more steps and Claude can use {{.ToolNames}}.</p>
 {{if .Note}}<p class="note">{{.Note}}</p>{{end}}
+` + browserPanel + quitPanel + `
 <hr class="div">
-<p class="overline">What’s next</p>
+<p class="overline">Progress</p>
 ` + stepsBlock + `
-<p class="lead" style="margin-top:20px">Once the tool opens in your browser, start a <b>new chat</b> in Claude and approve the sign-in tab when it appears. A new chat is required — a chat that was already open stays disconnected, even if you restart Claude. If Claude gives up while you’re still signing in, finish signing in and start another new chat.</p>
 </div>
 </body></html>`))
 
@@ -253,7 +303,7 @@ func setupHandler(configDir, prefHost, prefUser string, done chan<- error) http.
 			http.NotFound(w, r)
 			return
 		}
-		_ = setupPage.Execute(w, setupView{Logo: riseLogo, Host: prefHost, User: prefUser, Steps: steps(2), Tools: proxyGatedTools, ProxyHowTo: proxyHowToURL})
+		_ = setupPage.Execute(w, setupView{Logo: riseLogo, Host: prefHost, User: prefUser, Steps: steps(2), Tools: proxyGatedTools, ToolNames: toolNames(), ProxyHowTo: proxyHowToURL})
 	})
 	mux.HandleFunc("/save", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -269,7 +319,7 @@ func setupHandler(configDir, prefHost, prefUser string, done chan<- error) http.
 		// and resubmit without restarting the app. Host/User are kept; password is not.
 		reject := func(msg string) {
 			w.WriteHeader(http.StatusOK)
-			_ = setupPage.Execute(w, setupView{Logo: riseLogo, Host: host, User: user, Error: msg, Steps: steps(2), Tools: proxyGatedTools, ProxyHowTo: proxyHowToURL})
+			_ = setupPage.Execute(w, setupView{Logo: riseLogo, Host: host, User: user, Error: msg, Steps: steps(2), Tools: proxyGatedTools, ToolNames: toolNames(), ProxyHowTo: proxyHowToURL})
 		}
 
 		if host == "" || user == "" || pass == "" {
@@ -300,7 +350,7 @@ func setupHandler(configDir, prefHost, prefUser string, done chan<- error) http.
 			return
 		}
 
-		_ = successPage.Execute(w, successView{Logo: riseLogo, Note: note, Steps: steps(3), Tools: proxyGatedTools, ProxyHowTo: proxyHowToURL})
+		_ = successPage.Execute(w, successView{Logo: riseLogo, Note: note, Steps: steps(3), Tools: proxyGatedTools, ToolNames: toolNames(), ProxyHowTo: proxyHowToURL})
 		done <- nil
 	})
 	return mux

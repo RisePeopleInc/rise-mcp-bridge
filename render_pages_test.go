@@ -19,7 +19,7 @@ func TestRenderSetupPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := setupPage.Execute(f, setupView{Logo: riseLogo, Host: defaultProxyHost, User: "steve_bond", Steps: steps(2), Tools: proxyGatedTools, ProxyHowTo: proxyHowToURL}); err != nil {
+	if err := setupPage.Execute(f, setupView{Logo: riseLogo, Host: defaultProxyHost, User: "steve_bond", Steps: steps(2), Tools: proxyGatedTools, ToolNames: toolNames(), ProxyHowTo: proxyHowToURL}); err != nil {
 		t.Fatalf("setup page: %v", err)
 	}
 	f.Close()
@@ -27,7 +27,7 @@ func TestRenderSetupPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := successPage.Execute(g, successView{Logo: riseLogo, Steps: steps(3), Tools: proxyGatedTools, ProxyHowTo: proxyHowToURL}); err != nil {
+	if err := successPage.Execute(g, successView{Logo: riseLogo, Steps: steps(3), Tools: proxyGatedTools, ToolNames: toolNames(), ProxyHowTo: proxyHowToURL}); err != nil {
 		t.Fatalf("success page: %v", err)
 	}
 	g.Close()
