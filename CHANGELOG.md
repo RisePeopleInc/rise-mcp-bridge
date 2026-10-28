@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.13] — 2026-10-27
+
+### Fixed
+
+- **Metabase calls from Cowork timed out after 60 s while Claude Code worked.** Every bridge process (the desktop app's, which lives as long as the app, plus one per Claude Code session) loaded the shared token file once and then refreshed its own in-memory copy. The authorization server issues a new refresh token on each refresh, so once another bridge refreshed, the long-lived bridge's refresh token was spent and every refresh failed with `invalid_request`. The bridge now prefers a still-valid token from the shared file and refreshes only from the file's latest token, re-reading it if a refresh loses a race.
+- **A failed request now gets an answer.** On any upstream or token error the bridge only wrote to stderr (which the desktop app discards), so Claude waited for a reply that never came and reported "Device … did not respond within 60s". It now returns a JSON-RPC error naming the cause.
+- **A 401 is retried once with a fresh token** instead of failing the call with a token the server has already rejected.
+
 ## [0.2.12] — 2026-09-15
 
 ### Fixed

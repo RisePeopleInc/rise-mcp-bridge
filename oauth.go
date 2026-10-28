@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -248,7 +249,7 @@ func Authenticate(ctx context.Context, client *http.Client, mcpEndpoint string, 
 	conf := oauthConfig(meta, clientID)
 
 	if tok, ok := store.load(); ok {
-		return persistingSource{store: store, src: conf.TokenSource(ctxWithClient(ctx, client), tok)}, nil
+		return newSharedTokenSource(ctxWithClient(ctx, client), conf, store, tok), nil
 	}
 
 	var tok *oauth2.Token
@@ -275,7 +276,7 @@ func Authenticate(ctx context.Context, client *http.Client, mcpEndpoint string, 
 			return nil, err
 		}
 	}
-	return persistingSource{store: store, src: conf.TokenSource(ctxWithClient(ctx, client), tok)}, nil
+	return newSharedTokenSource(ctxWithClient(ctx, client), conf, store, tok), nil
 }
 
 // runLogin is the detached helper (`--login --mcp-endpoint URL`): sign in via the
@@ -469,17 +470,82 @@ func loopbackPKCE(ctx context.Context, client *http.Client, conf *oauth2.Config,
 	}
 }
 
-type persistingSource struct {
+// sharedTokenSource keeps every bridge process on the same token. Several
+// bridges run at once -- one per Claude chat or Claude Code session -- and share
+// the token file, while the authorization server hands out a new refresh token
+// on every refresh. A bridge that refreshed from its own in-memory copy would
+// sooner or later present a refresh token another bridge had already spent, get
+// "invalid_request", and fail every call from then on (seen in Cowork, whose
+// bridge lives as long as the desktop app). So each call prefers a still-valid
+// token from the file, and refreshes only from the file's latest token.
+type sharedTokenSource struct {
+	ctx   context.Context
+	conf  *oauth2.Config
 	store tokenStore
-	src   oauth2.TokenSource
+
+	mu       sync.Mutex
+	tok      *oauth2.Token
+	rejected string // access token the server answered 401 to; never reuse it
 }
 
-func (p persistingSource) Token() (*oauth2.Token, error) {
-	tok, err := p.src.Token()
-	if err == nil && tok != nil {
-		_ = p.store.save(tok)
+func newSharedTokenSource(ctx context.Context, conf *oauth2.Config, store tokenStore, tok *oauth2.Token) *sharedTokenSource {
+	return &sharedTokenSource{ctx: ctx, conf: conf, store: store, tok: tok}
+}
+
+func (s *sharedTokenSource) usable(tok *oauth2.Token) bool {
+	return tok != nil && tok.Valid() && tok.AccessToken != s.rejected
+}
+
+func (s *sharedTokenSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.usable(s.tok) {
+		return s.tok, nil
 	}
-	return tok, err
+	if disk, ok := s.store.load(); ok {
+		if s.usable(disk) {
+			s.tok = disk
+			return disk, nil
+		}
+		if disk.RefreshToken != "" {
+			s.tok = disk
+		}
+	}
+	tok, err := s.refresh()
+	if err != nil {
+		// Another bridge may have refreshed between our read and our refresh,
+		// spending the refresh token we just used; its result lands in the file.
+		time.Sleep(time.Second)
+		if disk, ok := s.store.load(); ok && s.usable(disk) {
+			s.tok = disk
+			return disk, nil
+		}
+		return nil, err
+	}
+	s.tok = tok
+	_ = s.store.save(tok)
+	return tok, nil
+}
+
+// refresh forces a refresh-token grant, even when the cached access token still
+// looks unexpired (it may be the one the server just rejected).
+func (s *sharedTokenSource) refresh() (*oauth2.Token, error) {
+	if s.tok == nil || s.tok.RefreshToken == "" {
+		return nil, fmt.Errorf("no refresh token; sign in again by starting a new chat")
+	}
+	stale := *s.tok
+	stale.Expiry = time.Unix(1, 0)
+	return s.conf.TokenSource(s.ctx, &stale).Token()
+}
+
+// invalidate records that the server rejected tok, so the next Token call
+// re-reads the file or refreshes instead of sending it again.
+func (s *sharedTokenSource) invalidate(tok *oauth2.Token) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tok != nil {
+		s.rejected = tok.AccessToken
+	}
 }
 
 func ctxWithClient(ctx context.Context, client *http.Client) context.Context {
