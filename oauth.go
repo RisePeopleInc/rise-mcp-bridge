@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -70,19 +73,54 @@ func (t tokenStore) load() (*oauth2.Token, bool) {
 	return &tok, true
 }
 
-// save writes the token atomically (temp file + rename) so a concurrent reader --
-// the bridge instance waiting on the detached sign-in helper -- never sees a
-// half-written file.
+// save writes the token atomically (unique temp file + rename) so a concurrent
+// reader -- another bridge, or one waiting on the detached sign-in helper --
+// never sees a half-written file, and two bridges saving at once cannot
+// interleave their writes.
 func (t tokenStore) save(tok *oauth2.Token) error {
 	raw, err := json.MarshalIndent(tok, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := t.path() + ".part"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+	f, err := os.CreateTemp(t.dir, filepath.Base(t.path())+".*.part")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, t.path())
+	_, werr := f.Write(raw)
+	cerr := f.Close()
+	if err := errors.Join(werr, cerr); err != nil {
+		os.Remove(f.Name())
+		return err
+	}
+	if err := os.Rename(f.Name(), t.path()); err != nil {
+		os.Remove(f.Name())
+		return err
+	}
+	return nil
+}
+
+// lock takes the lock that serialises token refreshes across bridge processes
+// and returns its release. It waits up to 20 s. A lock file older than a minute
+// was left by a bridge that died mid-refresh and is taken over. If the lock
+// still cannot be had it proceeds without one rather than fail the call.
+func (t tokenStore) lock() (release func()) {
+	path := t.path() + ".lock"
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			f.Close()
+			return func() { os.Remove(path) }
+		}
+		if !errors.Is(err, fs.ErrExist) || time.Now().After(deadline) {
+			return func() {}
+		}
+		if fi, err := os.Stat(path); err == nil && time.Since(fi.ModTime()) > time.Minute {
+			os.Remove(path)
+			continue
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // authServerMeta is what we need from the authorization server's RFC 8414
@@ -248,7 +286,7 @@ func Authenticate(ctx context.Context, client *http.Client, mcpEndpoint string, 
 	conf := oauthConfig(meta, clientID)
 
 	if tok, ok := store.load(); ok {
-		return persistingSource{store: store, src: conf.TokenSource(ctxWithClient(ctx, client), tok)}, nil
+		return newSharedTokenSource(ctxWithClient(ctx, client), conf, store, tok, mcpEndpoint, caFile), nil
 	}
 
 	var tok *oauth2.Token
@@ -275,7 +313,7 @@ func Authenticate(ctx context.Context, client *http.Client, mcpEndpoint string, 
 			return nil, err
 		}
 	}
-	return persistingSource{store: store, src: conf.TokenSource(ctxWithClient(ctx, client), tok)}, nil
+	return newSharedTokenSource(ctxWithClient(ctx, client), conf, store, tok, mcpEndpoint, caFile), nil
 }
 
 // runLogin is the detached helper (`--login --mcp-endpoint URL`): sign in via the
@@ -318,6 +356,9 @@ func runLogin(configDir, mcpEndpoint, caFile string) error {
 	fmt.Fprintln(os.Stderr, "[rise-mcp-bridge] Signed in; token saved.")
 	return nil
 }
+
+// startSignIn is spawnLoginHelper, replaceable in tests.
+var startSignIn = spawnLoginHelper
 
 // spawnLoginHelper re-executes this binary detached (own session / process group,
 // no inherited stdio) so it outlives us if the MCP host kills us.
@@ -469,17 +510,117 @@ func loopbackPKCE(ctx context.Context, client *http.Client, conf *oauth2.Config,
 	}
 }
 
-type persistingSource struct {
-	store tokenStore
-	src   oauth2.TokenSource
+// sharedTokenSource keeps every bridge process on the same token. Several
+// bridges run at once -- one per Claude chat or Claude Code session -- and share
+// the token file, while the authorization server hands out a new refresh token
+// on every refresh. A bridge that refreshed from its own in-memory copy would
+// sooner or later present a refresh token another bridge had already spent, get
+// "invalid_request", and fail every call from then on (seen in Cowork, whose
+// bridge lives as long as the desktop app). So each call prefers a still-valid
+// token from the file, and refreshes only from the file's latest token while
+// holding a lock the other bridges respect.
+type sharedTokenSource struct {
+	ctx      context.Context
+	conf     *oauth2.Config
+	store    tokenStore
+	endpoint string // for the sign-in helper
+	caFile   string
+
+	mu       sync.Mutex
+	tok      *oauth2.Token
+	rejected string    // access token the server answered 401 to; never reuse it
+	spawned  time.Time // when this bridge last started a browser sign-in
 }
 
-func (p persistingSource) Token() (*oauth2.Token, error) {
-	tok, err := p.src.Token()
-	if err == nil && tok != nil {
-		_ = p.store.save(tok)
+func newSharedTokenSource(ctx context.Context, conf *oauth2.Config, store tokenStore, tok *oauth2.Token, endpoint, caFile string) *sharedTokenSource {
+	return &sharedTokenSource{ctx: ctx, conf: conf, store: store, tok: tok, endpoint: endpoint, caFile: caFile}
+}
+
+func (s *sharedTokenSource) usable(tok *oauth2.Token) bool {
+	return tok != nil && tok.Valid() && tok.AccessToken != s.rejected
+}
+
+func (s *sharedTokenSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.usable(s.tok) {
+		return s.tok, nil
 	}
-	return tok, err
+	if disk, ok := s.store.load(); ok && s.usable(disk) {
+		s.tok = disk
+		return disk, nil
+	}
+
+	// Re-read once we hold the lock: a bridge that refreshed while we waited has
+	// written a fresh token, and its refresh token is now the only live one.
+	release := s.store.lock()
+	defer release()
+	if disk, ok := s.store.load(); ok {
+		if s.usable(disk) {
+			s.tok = disk
+			return disk, nil
+		}
+		if disk.RefreshToken != "" {
+			s.tok = disk
+		}
+	}
+	tok, err := s.refresh()
+	if err != nil {
+		if s.tok == nil || s.tok.RefreshToken == "" || refusedGrant(err) {
+			return nil, s.signInAgain(err)
+		}
+		return nil, err // network or server trouble: the sign-in may still be fine
+	}
+	s.tok = tok
+	if err := s.store.save(tok); err != nil {
+		fmt.Fprintf(os.Stderr, "[rise-mcp-bridge] could not save the refreshed token (other bridges may need to sign in again): %v\n", err)
+	}
+	return tok, nil
+}
+
+// refresh forces a refresh-token grant, even when the cached access token still
+// looks unexpired (it may be the one the server just rejected).
+func (s *sharedTokenSource) refresh() (*oauth2.Token, error) {
+	if s.tok == nil || s.tok.RefreshToken == "" {
+		return nil, fmt.Errorf("no refresh token")
+	}
+	stale := *s.tok
+	stale.Expiry = time.Unix(1, 0)
+	return s.conf.TokenSource(s.ctx, &stale).Token()
+}
+
+// refusedGrant reports whether the token endpoint refused the refresh token
+// itself (a 4xx), as opposed to being unreachable or failing (5xx).
+func refusedGrant(err error) bool {
+	var re *oauth2.RetrieveError
+	return errors.As(err, &re) && re.Response != nil && re.Response.StatusCode >= 400 && re.Response.StatusCode < 500
+}
+
+// signInAgain handles a sign-in the server will no longer renew: it opens the
+// browser sign-in (unless one is already running) and explains what to do. The
+// next call picks up the token the sign-in helper writes.
+func (s *sharedTokenSource) signInAgain(cause error) error {
+	if !loopbackFree() {
+		return fmt.Errorf("sign-in expired (%v); finish signing in in your browser, then try again", cause)
+	}
+	if time.Since(s.spawned) > signInTimeout {
+		if err := startSignIn(s.store, s.endpoint, s.caFile); err != nil {
+			return fmt.Errorf("sign-in expired (%v) and the browser sign-in could not start (%v); start a new chat to sign in again", cause, err)
+		}
+		s.spawned = time.Now()
+		fmt.Fprintf(os.Stderr, "[rise-mcp-bridge] Sign-in expired: opening your browser (log: %s).\n", s.store.loginLogPath())
+	}
+	return fmt.Errorf("sign-in expired (%v); sign in in the browser tab that opened, then try again", cause)
+}
+
+// invalidate records that the server rejected tok, so the next Token call
+// re-reads the file or refreshes instead of sending it again.
+func (s *sharedTokenSource) invalidate(tok *oauth2.Token) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tok != nil {
+		s.rejected = tok.AccessToken
+	}
 }
 
 func ctxWithClient(ctx context.Context, client *http.Client) context.Context {

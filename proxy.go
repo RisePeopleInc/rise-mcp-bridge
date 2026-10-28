@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -106,6 +107,14 @@ func newProxiedClient(proxyRawURL, caFile string) (*http.Client, error) {
 	transport := &http.Transport{
 		Proxy: http.ProxyURL(proxyURL),
 
+		// Bound every stage before the response starts, so a connection that died
+		// while the computer slept fails fast (and the request gets an error reply)
+		// instead of hanging past Claude's own 60 s wait. Metabase answers tool
+		// calls with an event stream, so its headers arrive before a slow query
+		// finishes; the stream itself has no deadline.
+		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 30 * time.Second,
+
 		// TLSClientConfig applies to the TLS connection to the *upstream* server.
 		TLSClientConfig: tlsConf,
 
@@ -119,8 +128,7 @@ func newProxiedClient(proxyRawURL, caFile string) (*http.Client, error) {
 		ForceAttemptHTTP2:     true,
 	}
 
-	// No global client Timeout: MCP Streamable HTTP uses long-lived SSE GET
-	// streams for server->client messages. Per-request deadlines are applied via
-	// context where appropriate in mcphttp.go.
+	// No global client Timeout: it would also cut off a long event-stream body.
+	// The transport timeouts above bound the wait for a response to start.
 	return &http.Client{Transport: transport}, nil
 }
