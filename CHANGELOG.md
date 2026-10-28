@@ -10,9 +10,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
-- **Metabase calls from Cowork timed out after 60 s while Claude Code worked.** Every bridge process (the desktop app's, which lives as long as the app, plus one per Claude Code session) loaded the shared token file once and then refreshed its own in-memory copy. The authorization server issues a new refresh token on each refresh, so once another bridge refreshed, the long-lived bridge's refresh token was spent and every refresh failed with `invalid_request`. The bridge now prefers a still-valid token from the shared file and refreshes only from the file's latest token, re-reading it if a refresh loses a race.
-- **A failed request now gets an answer.** On any upstream or token error the bridge only wrote to stderr (which the desktop app discards), so Claude waited for a reply that never came and reported "Device … did not respond within 60s". It now returns a JSON-RPC error naming the cause.
-- **A 401 is retried once with a fresh token** instead of failing the call with a token the server has already rejected.
+- **Metabase calls from Cowork timed out after 60 s while Claude Code worked.** Every bridge process (the desktop app's, which lives as long as the app, plus one per Claude Code session) loaded the shared token file once and then refreshed its own in-memory copy. The authorization server issues a new refresh token on each refresh, so once another bridge refreshed, the long-lived bridge's refresh token was spent and every refresh failed with `invalid_request`. The bridge now prefers a still-valid token from the shared file and refreshes only from the file's latest token, under a lock file the other bridges respect, so two bridges never spend the same refresh token.
+- **Every request gets an answer.** On any upstream or token error the bridge only wrote to stderr (which the desktop app discards), and an empty, non-JSON or response-less reply was dropped silently; Claude waited for an answer that never came and reported "Device … did not respond within 60s". The bridge now tracks each request id (batches included) and answers any left unanswered with a JSON-RPC error naming the cause.
+- **An expired session is reopened.** Metabase answers 404 "Invalid or expired session" once it forgets a session; the bridge now replays the client's initialize and sends the message again, and retries a failed initialize before the next call.
+- **A dead connection fails fast.** Connects now time out after 15 s and a response must start within 30 s, so a connection that died while the computer slept no longer hangs past Claude's own wait. (Metabase starts its event-stream response for tool calls, including SQL, in under a second.)
+- **A 401 is retried once with a fresh token**, marking the token actually sent as rejected; with a static bearer token the server's 401 message is kept in the error.
+- **A sign-in the server will no longer renew opens the browser sign-in again** (once, and only for a 4xx refusal) instead of failing every call until the token file is deleted by hand.
+- Token saves use a unique temp file, so two bridges saving at once cannot interleave their writes.
 
 ## [0.2.12] — 2026-09-15
 
