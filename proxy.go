@@ -61,6 +61,11 @@ func isProxyAuthError(err error) bool {
 	return strings.Contains(s, "proxy authentication required") || strings.Contains(s, "407")
 }
 
+// healthCheckAfter is how long a connection may stay silent before it is
+// probed, and how long the probe may go unanswered. A variable so tests can
+// shorten it.
+var healthCheckAfter = 15 * time.Second
+
 // newProxiedClient builds an *http.Client whose every request is tunnelled
 // through the Rise HTTPS forward proxy.
 //
@@ -107,13 +112,20 @@ func newProxiedClient(proxyRawURL, caFile string) (*http.Client, error) {
 	transport := &http.Transport{
 		Proxy: http.ProxyURL(proxyURL),
 
-		// Bound every stage before the response starts, so a connection that died
-		// while the computer slept fails fast (and the request gets an error reply)
-		// instead of hanging past Claude's own 60 s wait. Metabase answers tool
-		// calls with an event stream, so its headers arrive before a slow query
-		// finishes; the stream itself has no deadline.
-		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		ResponseHeaderTimeout: 30 * time.Second,
+		// Catch a connection that died (say, while the computer slept) by probing
+		// it, never by how long the answer takes. Metabase sends no response
+		// headers for execute_sql until the query finishes, and finance pulls run
+		// for minutes, so a ResponseHeaderTimeout cut off every slow query (0.2.13).
+		// Instead: connects time out after 15 s, HTTP/2 pings a connection that
+		// has been silent for 15 s and closes it if the ping goes unanswered for
+		// another 15 s, and TCP keepalive (two unanswered probes, about 45 s)
+		// covers an HTTP/1.1 fallback.
+		// A live server answers pings while a query runs, so no query is cut off.
+		DialContext: (&net.Dialer{
+			Timeout:         15 * time.Second,
+			KeepAliveConfig: net.KeepAliveConfig{Enable: true, Idle: healthCheckAfter, Interval: healthCheckAfter, Count: 2},
+		}).DialContext,
+		HTTP2: &http.HTTP2Config{SendPingTimeout: healthCheckAfter, PingTimeout: healthCheckAfter},
 
 		// TLSClientConfig applies to the TLS connection to the *upstream* server.
 		TLSClientConfig: tlsConf,
@@ -129,6 +141,6 @@ func newProxiedClient(proxyRawURL, caFile string) (*http.Client, error) {
 	}
 
 	// No global client Timeout: it would also cut off a long event-stream body.
-	// The transport timeouts above bound the wait for a response to start.
+	// The connect timeout and the health checks above catch a dead connection.
 	return &http.Client{Transport: transport}, nil
 }

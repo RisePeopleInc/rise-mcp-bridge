@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.2.14] — 2026-10-30
+
+### Fixed
+
+- **SQL queries longer than 30 s failed with `http2: timeout awaiting response headers`.** 0.2.13 required a response to start within 30 s, assuming Metabase starts its event stream for tool calls straight away. For `execute_sql` it sends no headers until the query finishes, so every finance pull over 30 s failed (a 35 s `pg_sleep` reproduced it at 30.1 s). The deadline is gone. A dead connection is now caught by probing it instead: HTTP/2 pings a connection that has been silent for 15 s and closes it if the ping goes unanswered for 15 s more, and if HTTP/2 is not in use, TCP keepalive drops the connection after two unanswered probes (about 45 s). A live server answers the pings while a query runs, so a 90 s query through the proxy completes, and a connection that died while the computer slept still fails within about 30 s with an error reply. The 15 s connect timeout stays.
+
 ## [0.2.13] — 2026-10-27
 
 ### Fixed
