@@ -118,11 +118,12 @@ func newProxiedClient(proxyRawURL, caFile string) (*http.Client, error) {
 		// for minutes, so a ResponseHeaderTimeout cut off every slow query (0.2.13).
 		// Instead: connects time out after 15 s, HTTP/2 pings a connection that
 		// has been silent for 15 s and closes it if the ping goes unanswered for
-		// another 15 s, and TCP keepalive does the same for an HTTP/1.1 fallback.
+		// another 15 s, and TCP keepalive (two unanswered probes, about 45 s)
+		// covers an HTTP/1.1 fallback.
 		// A live server answers pings while a query runs, so no query is cut off.
 		DialContext: (&net.Dialer{
 			Timeout:         15 * time.Second,
-			KeepAliveConfig: net.KeepAliveConfig{Enable: true, Idle: healthCheckAfter, Interval: healthCheckAfter, Count: 4},
+			KeepAliveConfig: net.KeepAliveConfig{Enable: true, Idle: healthCheckAfter, Interval: healthCheckAfter, Count: 2},
 		}).DialContext,
 		HTTP2: &http.HTTP2Config{SendPingTimeout: healthCheckAfter, PingTimeout: healthCheckAfter},
 

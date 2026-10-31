@@ -114,14 +114,15 @@ func TestSlowResponseOnLiveConnectionSucceeds(t *testing.T) {
 // of hanging past Claude's own wait.
 func TestDeadConnectionFailsFast(t *testing.T) {
 	release := make(chan struct{})
-	var tp *tunnelProxy
+	var deadNow func()
 	client, url, tp := proxiedSetup(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/warm" {
 			return
 		}
-		tp.blackhole.Store(true)
+		deadNow()
 		<-release
 	})
+	deadNow = func() { tp.blackhole.Store(true) }
 	// Registered after proxiedSetup, so it runs first and the server can close.
 	t.Cleanup(func() { close(release) })
 	// Open the connection first, so the black hole hits a request in flight.
